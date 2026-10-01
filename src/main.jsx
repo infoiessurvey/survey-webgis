@@ -1,4 +1,3 @@
-
 import React, {
   useCallback,
   useEffect,
@@ -140,21 +139,42 @@ function cleanValue(value) {
     return "";
   }
 
-  return String(value).trim();
+  return String(value)
+    .replace(/^\uFEFF/, "")
+    .trim();
+}
+
+function normalizeHeader(value) {
+  return cleanValue(value)
+    .toLowerCase()
+    .replace(/\u00a0/g, " ")
+    .replace(/[._-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function firstExisting(row, names) {
   const keys = Object.keys(row || {});
 
-  for (const name of names) {
-    const exact = keys.find(
-      (key) =>
-        key.toLowerCase().trim() ===
-        name.toLowerCase().trim()
-    );
+  const normalizedKeys =
+    keys.map((key) => ({
+      original: key,
+      normalized:
+        normalizeHeader(key),
+    }));
 
-    if (exact) {
-      return row[exact];
+  for (const name of names) {
+    const wanted =
+      normalizeHeader(name);
+
+    const found =
+      normalizedKeys.find(
+        (item) =>
+          item.normalized === wanted
+      );
+
+    if (found) {
+      return row[found.original];
     }
   }
 
@@ -170,13 +190,306 @@ function numberValue(value) {
     return NaN;
   }
 
-  const n = Number(
+  const text =
     String(value)
+      .replace(/\uFEFF/g, "")
       .replace(/,/g, "")
-      .trim()
-  );
+      .trim();
+
+  const n = Number(text);
 
   return n;
+}
+
+function isValidLatLng(
+  lat,
+  lng
+) {
+  return (
+    Number.isFinite(lat) &&
+    Number.isFinite(lng) &&
+    lat !== 0 &&
+    lng !== 0 &&
+    lat >= -90 &&
+    lat <= 90 &&
+    lng >= -180 &&
+    lng <= 180
+  );
+}
+
+/* =========================================================
+   DETECT CSV HEADER ROW
+
+   This is important for the common Trig/BM CSV.
+
+   Example supported CSV:
+
+   Survey Trig Points
+   Nepal Survey
+   Date,2026
+
+   Station Name,Latitude,Longitude,Elevation,Remarks
+   TRIG-1,28.123,81.123,500,Good
+   TRIG-2,28.124,81.124,501,Good
+
+   The old parser assumed the first line was the header.
+========================================================= */
+
+function detectCSVHeaderRow(
+  text,
+  preferredHeaders = []
+) {
+  const cleanText =
+    String(text || "")
+      .replace(/^\uFEFF/, "");
+
+  const parsed =
+    Papa.parse(
+      cleanText,
+      {
+        header: false,
+        skipEmptyLines: true,
+        dynamicTyping: false,
+      }
+    );
+
+  const rows =
+    parsed.data || [];
+
+  if (!rows.length) {
+    return -1;
+  }
+
+  const preferred =
+    preferredHeaders.map(
+      normalizeHeader
+    );
+
+  let bestIndex = -1;
+  let bestScore = 0;
+
+  rows.forEach(
+    (row, index) => {
+      if (
+        index > 100
+      ) {
+        return;
+      }
+
+      const cells =
+        row.map(
+          normalizeHeader
+        );
+
+      let score = 0;
+
+      cells.forEach(
+        (cell) => {
+          if (!cell) {
+            return;
+          }
+
+          if (
+            preferred.includes(
+              cell
+            )
+          ) {
+            score += 2;
+          }
+
+          if (
+            cell.includes(
+              "latitude"
+            )
+          ) {
+            score += 2;
+          }
+
+          if (
+            cell.includes(
+              "longitude"
+            )
+          ) {
+            score += 2;
+          }
+
+          if (
+            cell === "easting" ||
+            cell.includes(
+              "utm easting"
+            )
+          ) {
+            score += 2;
+          }
+
+          if (
+            cell === "northing" ||
+            cell.includes(
+              "utm northing"
+            )
+          ) {
+            score += 2;
+          }
+
+          if (
+            cell === "station" ||
+            cell.includes(
+              "station name"
+            )
+          ) {
+            score += 2;
+          }
+
+          if (
+            cell === "name" ||
+            cell === "point"
+          ) {
+            score += 1;
+          }
+
+          if (
+            cell === "elevation" ||
+            cell === "msl" ||
+            cell === "rl"
+          ) {
+            score += 1;
+          }
+        }
+      );
+
+      if (
+        score > bestScore
+      ) {
+        bestScore =
+          score;
+
+        bestIndex =
+          index;
+      }
+    }
+  );
+
+  return bestIndex;
+}
+
+/* =========================================================
+   PARSE CSV WITH AUTO HEADER DETECTION
+========================================================= */
+
+function parseCSVWithDetectedHeader(
+  text,
+  preferredHeaders = []
+) {
+  const cleanText =
+    String(text || "")
+      .replace(/^\uFEFF/, "");
+
+  const headerIndex =
+    detectCSVHeaderRow(
+      cleanText,
+      preferredHeaders
+    );
+
+  console.log(
+    "Detected CSV header row:",
+    headerIndex
+  );
+
+  if (
+    headerIndex < 0
+  ) {
+    return {
+      rows: [],
+      fields: [],
+      headerIndex: -1,
+    };
+  }
+
+  const parsed =
+    Papa.parse(
+      cleanText,
+      {
+        header: false,
+        skipEmptyLines: true,
+        dynamicTyping: false,
+      }
+    );
+
+  const allRows =
+    parsed.data || [];
+
+  const header =
+    allRows[
+      headerIndex
+    ];
+
+  if (!header) {
+    return {
+      rows: [],
+      fields: [],
+      headerIndex,
+    };
+  }
+
+  const fields =
+    header.map(
+      (field, index) =>
+        cleanValue(
+          field
+        ) ||
+        `Column_${index + 1}`
+    );
+
+  const rows =
+    allRows
+      .slice(
+        headerIndex + 1
+      )
+      .map(
+        (values) => {
+          const row = {};
+
+          fields.forEach(
+            (
+              field,
+              index
+            ) => {
+              row[field] =
+                values[index] ??
+                "";
+            }
+          );
+
+          return row;
+        }
+      )
+      .filter(
+        (row) =>
+          Object.values(
+            row
+          ).some(
+            (value) =>
+              cleanValue(
+                value
+              ) !== ""
+          )
+      );
+
+  console.log(
+    "Detected CSV columns:",
+    fields
+  );
+
+  console.log(
+    "CSV data rows:",
+    rows.length
+  );
+
+  return {
+    rows,
+    fields,
+    headerIndex,
+  };
 }
 
 /* =========================================================
@@ -192,7 +505,8 @@ function utmToLatLng(
     !Number.isFinite(easting) ||
     !Number.isFinite(northing) ||
     easting === 0 ||
-    northing === 0
+    northing === 0 ||
+    !epsg
   ) {
     return null;
   }
@@ -232,24 +546,100 @@ function utmToLatLng(
 }
 
 /* =========================================================
+   DETECT UTM EPSG FROM CSV ROW
+========================================================= */
+
+function detectUTMEPSG(
+  row,
+  fallbackEPSG = null
+) {
+  const explicitEPSG =
+    cleanValue(
+      firstExisting(
+        row,
+        [
+          "EPSG",
+          "EPSG Code",
+          "CRS",
+          "Coordinate System",
+          "Projection",
+        ]
+      )
+    );
+
+  if (
+    /^epsg:\d+$/i.test(
+      explicitEPSG
+    )
+  ) {
+    return explicitEPSG.toUpperCase();
+  }
+
+  if (
+    /^\d+$/.test(
+      explicitEPSG
+    )
+  ) {
+    return `EPSG:${explicitEPSG}`;
+  }
+
+  const zoneValue =
+    cleanValue(
+      firstExisting(
+        row,
+        [
+          "UTM Zone",
+          "Zone",
+          "UTM_Z",
+          "UTMZone",
+          "Zone No",
+          "Zone Number",
+        ]
+      )
+    );
+
+  const zoneMatch =
+    zoneValue.match(
+      /\b(43|44|45|46)\b/
+    );
+
+  if (zoneMatch) {
+    return `EPSG:${
+      32600 +
+      Number(
+        zoneMatch[1]
+      )
+    }`;
+  }
+
+  return fallbackEPSG;
+}
+
+/* =========================================================
    CONTROL POINT CSV
-   IMPORTANT:
-   EMPTY / ZERO COORDINATES ARE IGNORED
 ========================================================= */
 
 function parseControlCSV(
   text,
   epsg
 ) {
-  const result =
-    Papa.parse(text, {
-      header: true,
-      skipEmptyLines: true,
-      dynamicTyping: false,
-    });
+  const parsed =
+    parseCSVWithDetectedHeader(
+      text,
+      [
+        "Station",
+        "Station Name",
+        "Point",
+        "Point Name",
+        "Easting",
+        "Northing",
+        "Latitude",
+        "Longitude",
+      ]
+    );
 
   const rows =
-    result.data || [];
+    parsed.rows || [];
 
   const points = [];
 
@@ -340,33 +730,23 @@ function parseControlCSV(
           )
         );
 
-      /* ---------------------------------------------
-         VALID UTM COORDINATES
-      --------------------------------------------- */
-
       const hasValidUTM =
         Number.isFinite(easting) &&
         Number.isFinite(northing) &&
         easting > 100000 &&
         northing > 100000;
 
-      /* ---------------------------------------------
-         VALID LAT/LONG
-      --------------------------------------------- */
-
       const hasValidLatLng =
-        Number.isFinite(lat) &&
-        Number.isFinite(lng) &&
-        lat !== 0 &&
-        lng !== 0;
+        isValidLatLng(
+          lat,
+          lng
+        );
 
       let latLng = null;
 
-      /* ---------------------------------------------
-         UTM → WGS84
-      --------------------------------------------- */
-
-      if (hasValidUTM) {
+      if (
+        hasValidUTM
+      ) {
         latLng =
           utmToLatLng(
             easting,
@@ -374,10 +754,6 @@ function parseControlCSV(
             epsg
           );
       }
-
-      /* ---------------------------------------------
-         FALLBACK LAT/LONG
-      --------------------------------------------- */
 
       if (
         !latLng &&
@@ -388,10 +764,6 @@ function parseControlCSV(
           lng,
         ];
       }
-
-      /* ---------------------------------------------
-         IGNORE INVALID ROW
-      --------------------------------------------- */
 
       if (!latLng) {
         console.warn(
@@ -404,14 +776,12 @@ function parseControlCSV(
         return;
       }
 
-      /* ---------------------------------------------
-         ADD VALID CONTROL POINT
-      --------------------------------------------- */
-
       points.push({
         station:
           station ||
-          `Point ${points.length + 1}`,
+          `Point ${
+            points.length + 1
+          }`,
 
         easting,
 
@@ -434,117 +804,211 @@ function parseControlCSV(
     }
   );
 
+  console.log(
+    `Control CSV parsed: ${points.length} valid points`
+  );
+
   return points;
 }
 
 /* =========================================================
    TRIG / BM CSV
+   ROBUST VERSION
 ========================================================= */
 
-function parseTrigCSV(text) {
-  const result = Papa.parse(text, {
-    header: true,
-    skipEmptyLines: true,
-    dynamicTyping: false,
-  });
-
-  const rows = result.data || [];
-
-  return rows
-    .map((row, index) => {
-      const name = cleanValue(
-        firstExisting(row, [
-          "Station Name",
-          "Station",
-          "Point Name",
-          "Point",
-          "Name",
-          "ID",
-        ])
-      );
-
-      const stationRef = cleanValue(
-        firstExisting(row, [
-          "Station Ref.",
-          "Station Ref",
-          "Station Reference",
-          "Ref.",
-          "Ref",
-          "Reference",
-        ])
-      );
-
-      const lat = numberValue(
-        firstExisting(row, [
-          "Latitude",
-          "Latitude N",
-          "Lat",
-          "Lat N",
-        ])
-      );
-
-      const lng = numberValue(
-        firstExisting(row, [
-          "Longitude",
-          "Longitude E",
-          "Long",
-          "Lon",
-          "Lng",
-          "Long E",
-        ])
-      );
-
-      const easting = numberValue(
-        firstExisting(row, [
-          "Easting",
-          "UTM Easting",
-          "X",
-        ])
-      );
-
-      const northing = numberValue(
-        firstExisting(row, [
-          "Northing",
-          "UTM Northing",
-          "Y",
-        ])
-      );
-
-      const elevation = firstExisting(row, [
+function parseTrigCSV(
+  text
+) {
+  const parsed =
+    parseCSVWithDetectedHeader(
+      text,
+      [
+        "Station Name",
+        "Station",
+        "Station Ref.",
+        "Station Ref",
+        "Point Name",
+        "Point",
+        "Latitude",
+        "Longitude",
+        "Easting",
+        "Northing",
+        "Elevation",
         "India MSL",
         "MSL",
-        "Elevation",
-        "Elev",
-        "RL",
-        "Height",
-        "Z",
-        "Reduced Level",
-      ]);
-
-      const remarks = cleanValue(
-        firstExisting(row, [
-          "Remarks",
-          "Remark",
-          "Description",
-        ])
-      );
-
-      const explicitType = cleanValue(
-        firstExisting(row, [
-          "Type",
-          "Point Type",
-          "Category",
-        ])
-      );
-
-      const classificationText = [
-        explicitType,
-        stationRef,
-        name,
-        remarks,
+        "Type",
+        "Remarks",
       ]
-        .join(" ")
-        .toLowerCase();
+    );
+
+  const rows =
+    parsed.rows || [];
+
+  console.log(
+    "Trig/BM detected fields:",
+    parsed.fields
+  );
+
+  console.log(
+    "Trig/BM raw rows:",
+    rows
+  );
+
+  const points = [];
+
+  rows.forEach(
+    (row, index) => {
+      const name =
+        cleanValue(
+          firstExisting(
+            row,
+            [
+              "Station Name",
+              "Station",
+              "Point Name",
+              "Point",
+              "Name",
+              "ID",
+              "Point ID",
+              "Trig Point",
+              "Trig Name",
+              "BM Name",
+            ]
+          )
+        );
+
+      const stationRef =
+        cleanValue(
+          firstExisting(
+            row,
+            [
+              "Station Ref.",
+              "Station Ref",
+              "Station Reference",
+              "Station No",
+              "Station Number",
+              "Ref.",
+              "Ref",
+              "Reference",
+            ]
+          )
+        );
+
+      const lat =
+        numberValue(
+          firstExisting(
+            row,
+            [
+              "Latitude",
+              "Latitude N",
+              "Lat",
+              "Lat N",
+              "Latitude (N)",
+            ]
+          )
+        );
+
+      const lng =
+        numberValue(
+          firstExisting(
+            row,
+            [
+              "Longitude",
+              "Longitude E",
+              "Long",
+              "Lon",
+              "Lng",
+              "Long E",
+              "Longitude (E)",
+            ]
+          )
+        );
+
+      const easting =
+        numberValue(
+          firstExisting(
+            row,
+            [
+              "Easting",
+              "UTM Easting",
+              "UTM_Easting",
+              "UTM E",
+              "East",
+              "X",
+            ]
+          )
+        );
+
+      const northing =
+        numberValue(
+          firstExisting(
+            row,
+            [
+              "Northing",
+              "UTM Northing",
+              "UTM_Northing",
+              "UTM N",
+              "North",
+              "Y",
+            ]
+          )
+        );
+
+      const elevation =
+        firstExisting(
+          row,
+          [
+            "India MSL",
+            "India MSL (m)",
+            "MSL",
+            "MSL Elevation",
+            "Elevation",
+            "Elev",
+            "RL",
+            "Height",
+            "Z",
+            "Reduced Level",
+            "Reduced Level (m)",
+          ]
+        );
+
+      const remarks =
+        cleanValue(
+          firstExisting(
+            row,
+            [
+              "Remarks",
+              "Remark",
+              "Description",
+              "Comment",
+              "Comments",
+            ]
+          )
+        );
+
+      const explicitType =
+        cleanValue(
+          firstExisting(
+            row,
+            [
+              "Type",
+              "Point Type",
+              "Category",
+              "Class",
+              "Classification",
+            ]
+          )
+        );
+
+      const classificationText =
+        [
+          explicitType,
+          stationRef,
+          name,
+          remarks,
+        ]
+          .join(" ")
+          .toLowerCase();
 
       const type =
         /\bbm\b|benchmark|bench mark/.test(
@@ -555,45 +1019,118 @@ function parseTrigCSV(text) {
 
       let latLng = null;
 
+      /* ---------------------------------------------
+         FIRST: LAT/LONG
+      --------------------------------------------- */
+
       if (
-        Number.isFinite(lat) &&
-        Number.isFinite(lng) &&
-        lat !== 0 &&
-        lng !== 0 &&
-        lat >= -90 &&
-        lat <= 90 &&
-        lng >= -180 &&
-        lng <= 180
+        isValidLatLng(
+          lat,
+          lng
+        )
       ) {
-        latLng = [lat, lng];
+        latLng = [
+          lat,
+          lng,
+        ];
       }
+
+      /* ---------------------------------------------
+         SECOND: UTM
+      --------------------------------------------- */
+
+      let usedEPSG = null;
+
+      if (
+        !latLng &&
+        Number.isFinite(
+          easting
+        ) &&
+        Number.isFinite(
+          northing
+        ) &&
+        easting > 100000 &&
+        northing > 100000
+      ) {
+        usedEPSG =
+          detectUTMEPSG(
+            row,
+            null
+          );
+
+        if (usedEPSG) {
+          latLng =
+            utmToLatLng(
+              easting,
+              northing,
+              usedEPSG
+            );
+        }
+      }
+
+      /* ---------------------------------------------
+         INVALID ROW
+      --------------------------------------------- */
 
       if (!latLng) {
         console.warn(
-          `Ignoring invalid Trig/BM row ${index + 1}:`,
+          `Ignoring invalid Trig/BM row ${
+            index + 1
+          }:`,
           row
         );
-        return null;
+
+        return;
       }
 
-      return {
+      const finalName =
+        name ||
+        stationRef ||
+        `${type}-${
+          points.length + 1
+        }`;
+
+      points.push({
         name:
-          name ||
-          stationRef ||
-          `${type}-${index + 1}`,
+          finalName,
+
         stationRef,
+
         type,
-        latitude: lat,
-        longitude: lng,
+
+        latitude:
+          latLng[0],
+
+        longitude:
+          latLng[1],
+
         easting,
+
         northing,
-        elevation: cleanValue(elevation),
+
+        elevation:
+          cleanValue(
+            elevation
+          ),
+
         remarks,
+
+        epsg:
+          usedEPSG || "",
+
         raw: row,
-        __latLng: latLng,
-      };
-    })
-    .filter(Boolean);
+
+        __latLng:
+          latLng,
+      });
+    }
+  );
+
+  console.log(
+    `Successfully parsed ${points.length} Trig/BM points`
+  );
+
+  return points;
 }
 
 /* =========================================================
@@ -628,11 +1165,6 @@ function kmlTextToGeoJSON(
 
 /* =========================================================
    ROBUST CROSS-SECTION KML PARSER
-
-   Some survey KML files are valid KML but are not converted
-   reliably by @tmcw/togeojson (especially MultiGeometry /
-   LineString combinations). Cross sections are therefore
-   parsed separately as Leaflet-friendly GeoJSON.
 ========================================================= */
 
 function elementsByLocalName(
@@ -650,15 +1182,26 @@ function elementsByLocalName(
       ? root.getElementsByTagName("*")
       : [];
 
-  for (let i = 0; i < all.length; i += 1) {
-    const element = all[i];
+  for (
+    let i = 0;
+    i < all.length;
+    i += 1
+  ) {
+    const element =
+      all[i];
 
     if (
-      String(element.localName || element.tagName)
-        .toLowerCase() ===
-      String(wantedName).toLowerCase()
+      String(
+        element.localName ||
+          element.tagName
+      ).toLowerCase() ===
+      String(
+        wantedName
+      ).toLowerCase()
     ) {
-      result.push(element);
+      result.push(
+        element
+      );
     }
   }
 
@@ -682,33 +1225,48 @@ function parseKmlLineCoordinates(
 ) {
   const coordinates = [];
 
-  const tokens = String(
-    coordinatesText || ""
-  )
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean);
+  const tokens =
+    String(
+      coordinatesText || ""
+    )
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
 
-  tokens.forEach((token) => {
-    const parts = token.split(",");
+  tokens.forEach(
+    (token) => {
+      const parts =
+        token.split(",");
 
-    const longitude = Number(parts[0]);
-    const latitude = Number(parts[1]);
+      const longitude =
+        Number(
+          parts[0]
+        );
 
-    if (
-      Number.isFinite(latitude) &&
-      Number.isFinite(longitude) &&
-      latitude >= -90 &&
-      latitude <= 90 &&
-      longitude >= -180 &&
-      longitude <= 180
-    ) {
-      coordinates.push([
-        latitude,
-        longitude,
-      ]);
+      const latitude =
+        Number(
+          parts[1]
+        );
+
+      if (
+        Number.isFinite(
+          latitude
+        ) &&
+        Number.isFinite(
+          longitude
+        ) &&
+        latitude >= -90 &&
+        latitude <= 90 &&
+        longitude >= -180 &&
+        longitude <= 180
+      ) {
+        coordinates.push([
+          latitude,
+          longitude,
+        ]);
+      }
     }
-  });
+  );
 
   return coordinates;
 }
@@ -721,31 +1279,46 @@ function parseGxTrackCoordinates(
   elementsByLocalName(
     trackElement,
     "coord"
-  ).forEach((coordElement) => {
-    const parts = String(
-      coordElement.textContent || ""
-    )
-      .trim()
-      .split(/\s+/)
-      .filter(Boolean);
+  ).forEach(
+    (coordElement) => {
+      const parts =
+        String(
+          coordElement.textContent ||
+            ""
+        )
+          .trim()
+          .split(/\s+/)
+          .filter(Boolean);
 
-    const longitude = Number(parts[0]);
-    const latitude = Number(parts[1]);
+      const longitude =
+        Number(
+          parts[0]
+        );
 
-    if (
-      Number.isFinite(latitude) &&
-      Number.isFinite(longitude) &&
-      latitude >= -90 &&
-      latitude <= 90 &&
-      longitude >= -180 &&
-      longitude <= 180
-    ) {
-      coordinates.push([
-        latitude,
-        longitude,
-      ]);
+      const latitude =
+        Number(
+          parts[1]
+        );
+
+      if (
+        Number.isFinite(
+          latitude
+        ) &&
+        Number.isFinite(
+          longitude
+        ) &&
+        latitude >= -90 &&
+        latitude <= 90 &&
+        longitude >= -180 &&
+        longitude <= 180
+      ) {
+        coordinates.push([
+          latitude,
+          longitude,
+        ]);
+      }
     }
-  });
+  );
 
   return coordinates;
 }
@@ -793,7 +1366,8 @@ function parseCrossSectionsKML(
 
     const name =
       String(
-        nameElement?.textContent || ""
+        nameElement?.textContent ||
+          ""
       ).trim() ||
       `Cross Section ${
         fallbackIndex + 1
@@ -801,50 +1375,66 @@ function parseCrossSectionsKML(
 
     const lineParts = [];
 
-    /* Standard KML LineString */
     elementsByLocalName(
       placemark,
       "LineString"
-    ).forEach((lineString) => {
-      const coordinatesElement =
-        firstElementByLocalName(
-          lineString,
-          "coordinates"
-        );
+    ).forEach(
+      (lineString) => {
+        const coordinatesElement =
+          firstElementByLocalName(
+            lineString,
+            "coordinates"
+          );
 
-      const coordinates =
-        parseKmlLineCoordinates(
-          coordinatesElement?.textContent || ""
-        );
+        const coordinates =
+          parseKmlLineCoordinates(
+            coordinatesElement?.textContent ||
+              ""
+          );
 
-      if (coordinates.length >= 2) {
-        lineParts.push(coordinates);
+        if (
+          coordinates.length >= 2
+        ) {
+          lineParts.push(
+            coordinates
+          );
+        }
       }
-    });
+    );
 
-    /* Google Earth gx:Track */
     elementsByLocalName(
       placemark,
       "Track"
-    ).forEach((track) => {
-      const coordinates =
-        parseGxTrackCoordinates(
-          track
-        );
+    ).forEach(
+      (track) => {
+        const coordinates =
+          parseGxTrackCoordinates(
+            track
+          );
 
-      if (coordinates.length >= 2) {
-        lineParts.push(coordinates);
+        if (
+          coordinates.length >= 2
+        ) {
+          lineParts.push(
+            coordinates
+          );
+        }
       }
-    });
+    );
 
-    if (lineParts.length === 1) {
+    if (
+      lineParts.length === 1
+    ) {
       features.push({
         type: "Feature",
+
         properties: {
           name,
         },
+
         geometry: {
           type: "LineString",
+
           coordinates:
             lineParts[0].map(
               ([lat, lng]) => [
@@ -854,38 +1444,48 @@ function parseCrossSectionsKML(
             ),
         },
       });
-    } else if (lineParts.length > 1) {
+    } else if (
+      lineParts.length > 1
+    ) {
       features.push({
         type: "Feature",
+
         properties: {
           name,
         },
+
         geometry: {
           type: "MultiLineString",
+
           coordinates:
-            lineParts.map((line) =>
-              line.map(
-                ([lat, lng]) => [
-                  lng,
-                  lat,
-                ]
-              )
+            lineParts.map(
+              (line) =>
+                line.map(
+                  ([lat, lng]) => [
+                    lng,
+                    lat,
+                  ]
+                )
             ),
         },
       });
     }
   };
 
-  if (placemarks.length > 0) {
+  if (
+    placemarks.length > 0
+  ) {
     placemarks.forEach(
-      (placemark, index) =>
+      (
+        placemark,
+        index
+      ) =>
         processPlacemark(
           placemark,
           index
         )
     );
   } else {
-    /* Fallback for KML files without Placemark wrappers */
     const lineStrings =
       elementsByLocalName(
         xml,
@@ -893,7 +1493,10 @@ function parseCrossSectionsKML(
       );
 
     lineStrings.forEach(
-      (lineString, index) => {
+      (
+        lineString,
+        index
+      ) => {
         const coordinatesElement =
           firstElementByLocalName(
             lineString,
@@ -902,19 +1505,25 @@ function parseCrossSectionsKML(
 
         const coordinates =
           parseKmlLineCoordinates(
-            coordinatesElement?.textContent || ""
+            coordinatesElement?.textContent ||
+              ""
           );
 
-        if (coordinates.length >= 2) {
+        if (
+          coordinates.length >= 2
+        ) {
           features.push({
             type: "Feature",
+
             properties: {
               name: `Cross Section ${
                 index + 1
               }`,
             },
+
             geometry: {
               type: "LineString",
+
               coordinates:
                 coordinates.map(
                   ([lat, lng]) => [
@@ -939,7 +1548,9 @@ function parseCrossSectionsKML(
    HTML ESCAPE
 ========================================================= */
 
-function escapeHtml(value) {
+function escapeHtml(
+  value
+) {
   return String(
     value === null ||
       value === undefined
@@ -1002,7 +1613,25 @@ function controlIcon(
       "marker-wrap",
 
     html: `
-      <div class="marker cp">
+      <div
+        class="marker cp"
+        style="
+          min-width:24px;
+          min-height:24px;
+          padding:4px 7px;
+          display:flex;
+          align-items:center;
+          justify-content:center;
+          background:#2563eb;
+          color:#ffffff;
+          border:2px solid #ffffff;
+          border-radius:50%;
+          box-shadow:0 2px 7px rgba(0,0,0,.45);
+          font-size:10px;
+          font-weight:700;
+          white-space:nowrap;
+        "
+      >
         ${escapeHtml(
           station
         )}
@@ -1030,14 +1659,36 @@ function controlIcon(
    TRIG ICON
 ========================================================= */
 
-function trigIcon(name) {
+function trigIcon(
+  name
+) {
   return L.divIcon({
     className:
       "marker-wrap",
 
     html: `
-      <div class="marker trig">
-        ${escapeHtml(name)}
+      <div
+        class="marker trig"
+        style="
+          min-width:28px;
+          min-height:28px;
+          padding:4px 6px;
+          display:flex;
+          align-items:center;
+          justify-content:center;
+          background:#dc2626;
+          color:#ffffff;
+          border:2px solid #ffffff;
+          border-radius:50%;
+          box-shadow:0 2px 8px rgba(0,0,0,.55);
+          font-size:10px;
+          font-weight:800;
+          white-space:nowrap;
+        "
+      >
+        ${escapeHtml(
+          name
+        )}
       </div>
     `,
 
@@ -1062,14 +1713,36 @@ function trigIcon(name) {
    BM ICON
 ========================================================= */
 
-function bmIcon(name) {
+function bmIcon(
+  name
+) {
   return L.divIcon({
     className:
       "marker-wrap",
 
     html: `
-      <div class="marker bm">
-        ${escapeHtml(name)}
+      <div
+        class="marker bm"
+        style="
+          min-width:28px;
+          min-height:28px;
+          padding:4px 6px;
+          display:flex;
+          align-items:center;
+          justify-content:center;
+          background:#16a34a;
+          color:#ffffff;
+          border:2px solid #ffffff;
+          border-radius:5px;
+          box-shadow:0 2px 8px rgba(0,0,0,.55);
+          font-size:10px;
+          font-weight:800;
+          white-space:nowrap;
+        "
+      >
+        ${escapeHtml(
+          name
+        )}
       </div>
     `,
 
@@ -1192,6 +1865,7 @@ function controlPopup(
       "easting",
       "e",
       "utm easting",
+      "utm easting",
       "utm_easting",
       "x",
       "northing",
@@ -1212,9 +1886,9 @@ function controlPopup(
       .filter(
         ([key]) =>
           !shownKeys.has(
-            String(key)
-              .toLowerCase()
-              .trim()
+            normalizeHeader(
+              key
+            )
           )
       )
       .filter(
@@ -1329,6 +2003,19 @@ function trigPopup(
   `);
 
   if (
+    point.stationRef
+  ) {
+    rows.push(`
+      <div class="prow">
+        <b>Station Ref.</b>
+        <span>${escapeHtml(
+          point.stationRef
+        )}</span>
+      </div>
+    `);
+  }
+
+  if (
     Number.isFinite(
       point.latitude
     )
@@ -1389,6 +2076,19 @@ function trigPopup(
   }
 
   if (
+    point.epsg
+  ) {
+    rows.push(`
+      <div class="prow">
+        <b>CRS</b>
+        <span>${escapeHtml(
+          point.epsg
+        )}</span>
+      </div>
+    `);
+  }
+
+  if (
     point.elevation !== ""
   ) {
     rows.push(`
@@ -1396,6 +2096,19 @@ function trigPopup(
         <b>Elevation</b>
         <span>${escapeHtml(
           point.elevation
+        )}</span>
+      </div>
+    `);
+  }
+
+  if (
+    point.remarks
+  ) {
+    rows.push(`
+      <div class="prow">
+        <b>Remarks</b>
+        <span>${escapeHtml(
+          point.remarks
         )}</span>
       </div>
     `);
@@ -1587,10 +2300,11 @@ function App() {
   const trigGroupRef =
     useRef(null);
 
-  // Keep Trig/BM data outside React state so loading it
-  // does not cause the overview map to rebuild/blink.
   const trigPointsRef =
     useRef([]);
+
+  const trigLoadingRef =
+    useRef(false);
 
   const uploadGroupRef =
     useRef(null);
@@ -1691,10 +2405,6 @@ function App() {
     mapRef.current =
       map;
 
-    /* ---------------------------------------------
-       PANES
-    --------------------------------------------- */
-
     const boundaryPane =
       map.createPane(
         "boundaryPane"
@@ -1738,10 +2448,6 @@ function App() {
     uploadPane.style.zIndex =
       700;
 
-    /* ---------------------------------------------
-       GOOGLE SATELLITE
-    --------------------------------------------- */
-
     const googleSatellite =
       L.tileLayer(
         "https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}",
@@ -1752,10 +2458,6 @@ function App() {
             "&copy; Google",
         }
       );
-
-    /* ---------------------------------------------
-       GOOGLE STREET
-    --------------------------------------------- */
 
     const googleStreet =
       L.tileLayer(
@@ -1771,10 +2473,6 @@ function App() {
     googleSatellite.addTo(
       map
     );
-
-    /* ---------------------------------------------
-       GROUPS
-    --------------------------------------------- */
 
     const boundaryGroup =
       L.layerGroup().addTo(
@@ -1816,10 +2514,6 @@ function App() {
     uploadGroupRef.current =
       uploadGroup;
 
-    /* ---------------------------------------------
-       LAYER CONTROL
-    --------------------------------------------- */
-
     layerControlRef.current =
       L.control
         .layers(
@@ -1853,10 +2547,6 @@ function App() {
           }
         )
         .addTo(map);
-
-    /* ---------------------------------------------
-       MEASUREMENT
-    --------------------------------------------- */
 
     try {
       L.control
@@ -1895,10 +2585,6 @@ function App() {
       );
     }
 
-    /* ---------------------------------------------
-       DEFAULT NEPAL VIEW
-    --------------------------------------------- */
-
     map.setView(
       [
         28.3949,
@@ -1907,22 +2593,29 @@ function App() {
       7
     );
 
-    /* ---------------------------------------------
-       FORCE MAP SIZE
-    --------------------------------------------- */
-
     setTimeout(() => {
       map.invalidateSize();
     }, 300);
-
-    /* ---------------------------------------------
-       CLEANUP
-    --------------------------------------------- */
 
     return () => {
       map.remove();
 
       mapRef.current =
+        null;
+
+      boundaryGroupRef.current =
+        null;
+
+      crossGroupRef.current =
+        null;
+
+      controlGroupRef.current =
+        null;
+
+      trigGroupRef.current =
+        null;
+
+      uploadGroupRef.current =
         null;
     };
   }, []);
@@ -1934,32 +2627,108 @@ function App() {
   const loadTrigPoints =
     useCallback(
       async () => {
+        if (
+          trigLoadingRef.current
+        ) {
+          console.log(
+            "Trig/BM loading already in progress."
+          );
+
+          return trigPointsRef.current;
+        }
+
+        trigLoadingRef.current =
+          true;
+
         try {
           setStatus(
             "Loading common Trig / BM data..."
           );
+
+          setError("");
 
           const url =
             publicUrl(
               COMMON_TRIG_PATH
             );
 
+          console.log(
+            "======================================"
+          );
+
+          console.log(
+            "Loading Trig/BM CSV:"
+          );
+
+          console.log(
+            url
+          );
+
           const response =
-            await fetch(url);
+            await fetch(
+              url,
+              {
+                cache:
+                  "no-store",
+              }
+            );
+
+          console.log(
+            "Trig/BM HTTP status:",
+            response.status
+          );
+
+          console.log(
+            "Trig/BM response OK:",
+            response.ok
+          );
 
           if (!response.ok) {
             throw new Error(
-              `Trig CSV request failed (${response.status})`
+              `Trig/BM CSV request failed (${response.status})`
             );
           }
 
           const text =
             await response.text();
 
+          console.log(
+            "Trig/BM CSV length:",
+            text.length
+          );
+
+          console.log(
+            "Trig/BM CSV first 1000 characters:"
+          );
+
+          console.log(
+            text.slice(
+              0,
+              1000
+            )
+          );
+
+          if (
+            !text.trim()
+          ) {
+            throw new Error(
+              "The Trig/BM CSV is empty."
+            );
+          }
+
           const points =
             parseTrigCSV(
               text
             );
+
+          if (
+            points.length ===
+            0
+          ) {
+            throw new Error(
+              "CSV was downloaded successfully, but 0 valid Trig/BM coordinates were found. Check the CSV header and coordinate columns."
+            );
+          }
 
           trigPointsRef.current =
             points;
@@ -1972,13 +2741,21 @@ function App() {
             trigGroupRef.current;
 
           if (!group) {
-            return;
+            throw new Error(
+              "Trig/BM Leaflet layer group is not initialized."
+            );
           }
 
           group.clearLayers();
 
           points.forEach(
             (point) => {
+              if (
+                !point.__latLng
+              ) {
+                return;
+              }
+
               const marker =
                 L.marker(
                   point.__latLng,
@@ -1995,6 +2772,9 @@ function App() {
 
                     pane:
                       "trigPane",
+
+                    riseOnHover:
+                      true,
                   }
                 );
 
@@ -2003,7 +2783,8 @@ function App() {
                   point
                 ),
                 {
-                  maxWidth: 320,
+                  maxWidth: 340,
+                  minWidth: 230,
                 }
               );
 
@@ -2018,9 +2799,15 @@ function App() {
           );
 
           console.log(
-            "Trig/BM points:",
+            "Successfully displayed Trig/BM points:",
             points
           );
+
+          console.log(
+            "======================================"
+          );
+
+          return points;
         } catch (err) {
           console.error(
             "Trig/BM loading failed:",
@@ -2037,6 +2824,18 @@ function App() {
           setStatus(
             "Trig / BM data unavailable"
           );
+
+          setError(
+            `Trig/BM error: ${
+              err?.message ||
+              "Unknown error"
+            }`
+          );
+
+          return [];
+        } finally {
+          trigLoadingRef.current =
+            false;
         }
       },
       []
@@ -2143,9 +2942,18 @@ function App() {
                 project.boundaryPath
               );
 
+            console.log(
+              `Loading boundary ${project.code}:`,
+              url
+            );
+
             const response =
               await fetch(
-                url
+                url,
+                {
+                  cache:
+                    "no-store",
+                }
               );
 
             if (
@@ -2220,31 +3028,17 @@ function App() {
            TRIG / BM BOUNDS
         ----------------------------------------- */
 
-        const trigBounds =
-          L.latLngBounds([]);
-
-        const currentTrigPoints =
-          trigPointsRef.current;
-
-        currentTrigPoints.forEach(
+        trigPointsRef.current.forEach(
           (point) => {
             if (
               point.__latLng
             ) {
-              trigBounds.extend(
+              overviewBounds.extend(
                 point.__latLng
               );
             }
           }
         );
-
-        if (
-          trigBounds.isValid()
-        ) {
-          overviewBounds.extend(
-            trigBounds
-          );
-        }
 
         /* -----------------------------------------
            FIT EVERYTHING
@@ -2281,7 +3075,7 @@ function App() {
         );
 
         setStatus(
-          "Overview ready — survey boundary and common data loaded."
+          "Overview ready — survey boundary and common Trig/BM data loaded."
         );
 
         setTimeout(() => {
@@ -2305,7 +3099,9 @@ function App() {
 
     return () =>
       clearTimeout(timer);
-  }, []);
+  }, [
+    showOverview,
+  ]);
 
   /* =======================================================
      LOAD PROJECT
@@ -2360,10 +3156,6 @@ function App() {
           `Loading ${project.code}...`
         );
 
-        /* -----------------------------------------
-           CLEAR OLD DATA
-        ----------------------------------------- */
-
         boundaryGroup.clearLayers();
 
         crossGroup.clearLayers();
@@ -2397,7 +3189,11 @@ function App() {
 
             const response =
               await fetch(
-                url
+                url,
+                {
+                  cache:
+                    "no-store",
+                }
               );
 
             if (
@@ -2471,11 +3267,6 @@ function App() {
 
         /* -----------------------------------------
            LOAD CROSS SECTIONS
-
-           IMPORTANT:
-           Use the dedicated KML parser above instead of
-           relying on togeojson for this layer. This handles
-           LineString, MultiGeometry and gx:Track KML.
         ----------------------------------------- */
 
         if (
@@ -2496,7 +3287,8 @@ function App() {
               await fetch(
                 url,
                 {
-                  cache: "no-store",
+                  cache:
+                    "no-store",
                 }
               );
 
@@ -2511,7 +3303,9 @@ function App() {
             const text =
               await response.text();
 
-            if (!text.trim()) {
+            if (
+              !text.trim()
+            ) {
               throw new Error(
                 "Cross-section KML is empty."
               );
@@ -2523,13 +3317,12 @@ function App() {
               );
 
             console.log(
-              `Cross sections parsed: ${
-                geojson.features.length
-              }`
+              `Cross sections parsed: ${geojson.features.length}`
             );
 
             if (
-              geojson.features.length === 0
+              geojson.features.length ===
+              0
             ) {
               throw new Error(
                 "KML was loaded, but no LineString/MultiLineString cross-section geometry was found."
@@ -2543,7 +3336,8 @@ function App() {
                   pane:
                     "crossPane",
 
-                  interactive: true,
+                  interactive:
+                    true,
 
                   style: {
                     color:
@@ -2562,7 +3356,10 @@ function App() {
                   },
 
                   onEachFeature:
-                    (feature, layer) => {
+                    (
+                      feature,
+                      layer
+                    ) => {
                       const name =
                         feature?.properties?.name ||
                         "Cross Section";
@@ -2596,9 +3393,7 @@ function App() {
             );
 
             setError(
-              `Cross sections could not be loaded: ${
-                crossError.message
-              }`
+              `Cross sections could not be loaded: ${crossError.message}`
             );
           }
         }
@@ -2616,9 +3411,18 @@ function App() {
               project.controlPath
             );
 
+          console.log(
+            `Loading control CSV ${project.code}:`,
+            url
+          );
+
           const response =
             await fetch(
-              url
+              url,
+              {
+                cache:
+                  "no-store",
+              }
             );
 
           if (
@@ -2632,14 +3436,6 @@ function App() {
           const text =
             await response.text();
 
-          /*
-             parseControlCSV() now removes:
-             - empty coordinates
-             - E = 0
-             - N = 0
-             - invalid coordinate rows
-          */
-
           validControls =
             parseControlCSV(
               text,
@@ -2649,10 +3445,6 @@ function App() {
           setControlPoints(
             validControls
           );
-
-          /* -----------------------------------------
-             ADD ONLY VALID CONTROL MARKERS
-          ----------------------------------------- */
 
           validControls.forEach(
             (point) => {
@@ -2773,10 +3565,6 @@ function App() {
           );
         }
 
-        /* -----------------------------------------
-           ADD CONTROL POINT BOUNDS
-        ----------------------------------------- */
-
         validControls.forEach(
           (point) => {
             if (
@@ -2788,10 +3576,6 @@ function App() {
             }
           }
         );
-
-        /* -----------------------------------------
-           ZOOM TO PROJECT
-        ----------------------------------------- */
 
         if (
           finalBounds.isValid()
@@ -2810,10 +3594,6 @@ function App() {
             }
           );
         }
-
-        /* -----------------------------------------
-           REFRESH LEAFLET SIZE
-        ----------------------------------------- */
 
         setTimeout(() => {
           map.invalidateSize();
@@ -2836,10 +3616,6 @@ function App() {
             );
           }
         }, 300);
-
-        /* -----------------------------------------
-           FINAL STATUS
-        ----------------------------------------- */
 
         setStatus(
           `${project.code}: ${validControls.length} control points loaded`
@@ -3084,13 +3860,6 @@ function App() {
 
     group.eachLayer(
       (layer) => {
-        /*
-           Only markers have getLatLng().
-           This prevents the old:
-           "layer.getLatLng is not a function"
-           error.
-        */
-
         if (
           !layer ||
           typeof layer.getLatLng !==
@@ -3151,10 +3920,6 @@ function App() {
           </div>
 
         </div>
-
-        {/* =================================================
-            PROJECT DETAIL
-        ================================================= */}
 
         {selectedProject ? (
           <>
@@ -3221,6 +3986,13 @@ function App() {
                 {boundaryCount
                   ? "Available"
                   : "Not available"}
+              </span>
+
+              <span>
+                Common Trig / BM:{" "}
+                {
+                  trigPoints.length
+                }
               </span>
 
               {loading && (
@@ -3437,6 +4209,10 @@ function App() {
 
               <div>
                 • Control Point: Click marker
+              </div>
+
+              <div>
+                • Trig/BM: Click marker
               </div>
 
               <div>
@@ -3729,6 +4505,10 @@ function App() {
 
               <div>
                 • Click a control point
+              </div>
+
+              <div>
+                • Click a Trig/BM point
               </div>
 
               <div>
