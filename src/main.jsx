@@ -61,7 +61,7 @@ const PROJECTS = [
     id: "kankai",
     name: "Kankai Survey",
     code: "KANKAI",
-    year: 2025,
+    year: 2026,
     location: "Jhapa, Nepal",
     epsg: "EPSG:32645",
 
@@ -75,6 +75,27 @@ const PROJECTS = [
 
     photoFolder:
       "KANKAI/photos/",
+  },
+
+  {
+    id: "bheri",
+    name: "Bheri Survey",
+    code: "BHERI",
+    year: 2026,
+    location: "Salyan and Surkhet, Nepal",
+    epsg: "EPSG:32644",
+
+    controlPath:
+      "BHERI/Control points/control points.csv",
+
+    boundaryPath:
+      "BHERI/Survey boundary/Survey boundary.kml",
+
+    crossPath:
+      "BHERI/Cross Sections/cross_sections.kml",
+
+    photoFolder:
+      "BHERI/photos/",
   },
 ];
 
@@ -112,36 +133,28 @@ function publicUrl(path) {
 ========================================================= */
 
 function cleanValue(value) {
-  if (value === null || value === undefined) return "";
-  return String(value).replace(/^\uFEFF/, "").trim();
-}
+  if (
+    value === null ||
+    value === undefined
+  ) {
+    return "";
+  }
 
-/* Make CSV header matching tolerant of spaces, dots, underscores,
-   brackets and capitalization differences. */
-function normalizeKey(value) {
-  return cleanValue(value)
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "");
+  return String(value).trim();
 }
 
 function firstExisting(row, names) {
   const keys = Object.keys(row || {});
-  const normalized = new Map(
-    keys.map((key) => [normalizeKey(key), key])
-  );
 
   for (const name of names) {
-    const key = normalized.get(normalizeKey(name));
-    if (key !== undefined) return row[key];
-  }
+    const exact = keys.find(
+      (key) =>
+        key.toLowerCase().trim() ===
+        name.toLowerCase().trim()
+    );
 
-  /* Fuzzy fallback: useful for headers such as
-     "Latitude N (DD)", "Longitude E", "Station Name (Point)". */
-  const wanted = names.map(normalizeKey).filter(Boolean);
-  for (const key of keys) {
-    const nk = normalizeKey(key);
-    if (wanted.some((w) => nk === w || nk.includes(w) || w.includes(nk))) {
-      return row[key];
+    if (exact) {
+      return row[exact];
     }
   }
 
@@ -149,61 +162,21 @@ function firstExisting(row, names) {
 }
 
 function numberValue(value) {
-  if (value === null || value === undefined) return NaN;
-
-  let text = cleanValue(value);
-  if (!text) return NaN;
-
-  /* Accept decimal values with optional N/S/E/W suffix. */
-  const directionMatch = text.match(/([NSEW])\s*$/i);
-  const direction = directionMatch ? directionMatch[1].toUpperCase() : "";
-
-  text = text
-    .replace(/,/g, "")
-    .replace(/[NSEW]\s*$/i, "")
-    .trim();
-
-  /* Decimal degrees */
-  const decimal = Number(text);
-  if (Number.isFinite(decimal)) {
-    if (direction === "S" || direction === "W") return -Math.abs(decimal);
-    return decimal;
+  if (
+    value === null ||
+    value === undefined ||
+    String(value).trim() === ""
+  ) {
+    return NaN;
   }
 
-  /* DMS such as 27°42'15.2"N */
-  const dms = text.match(
-    /(-?\d+(?:\.\d+)?)\s*[°º]?\s*(\d+(?:\.\d+)?)?\s*['′]?\s*(\d+(?:\.\d+)?)?\s*["″]?/i
+  const n = Number(
+    String(value)
+      .replace(/,/g, "")
+      .trim()
   );
-  if (dms) {
-    const deg = Number(dms[1]);
-    const min = Number(dms[2] || 0);
-    const sec = Number(dms[3] || 0);
-    if (Number.isFinite(deg) && Number.isFinite(min) && Number.isFinite(sec)) {
-      const value = Math.abs(deg) + min / 60 + sec / 3600;
-      return (deg < 0 || direction === "S" || direction === "W") ? -value : value;
-    }
-  }
 
-  /* Last-resort: take the first numeric token from a cell. */
-  const numeric = text.match(/[-+]?\d+(?:\.\d+)?/);
-  return numeric ? Number(numeric[0]) : NaN;
-}
-
-function findCoordinateByHeader(row, kind) {
-  const keys = Object.keys(row || {});
-  const candidates = keys.filter((key) => {
-    const k = normalizeKey(key);
-    if (kind === "lat") {
-      return /^(latitude|lat)(n|north)?$/.test(k) || k.includes("latitude") || k === "lat";
-    }
-    return /^(longitude|lon|lng)(e|east)?$/.test(k) || k.includes("longitude") || k === "lon" || k === "lng";
-  });
-
-  for (const key of candidates) {
-    const value = numberValue(row[key]);
-    if (Number.isFinite(value)) return value;
-  }
-  return NaN;
+  return n;
 }
 
 /* =========================================================
@@ -259,69 +232,6 @@ function utmToLatLng(
 }
 
 /* =========================================================
-   CSV READER
-
-   Survey CSV exports sometimes contain title / metadata rows before
-   the actual header. Detect the real header instead of assuming row 1.
-========================================================= */
-function parseSurveyCSVRows(text) {
-  const source = String(text || "")
-    .replace(/^\uFEFF/, "")
-    .replace(/\r\n?/g, "\n");
-
-  const lines = source.split("\n");
-
-  const parseFrom = (start) => {
-    const chunk = lines.slice(start).join("\n");
-    return Papa.parse(chunk, {
-      header: true,
-      skipEmptyLines: "greedy",
-      dynamicTyping: false,
-      delimitersToGuess: [",", "\t", ";", "|"],
-    });
-  };
-
-  let best = parseFrom(0);
-  const firstFields = Object.keys(best.data?.[0] || {});
-  const firstHeaderText = firstFields.map(normalizeKey).join(" ");
-  const looksLikeHeader = (value) => {
-    const k = normalizeKey(value);
-    return (
-      k.includes("latitude") || k.includes("longitude") ||
-      k.includes("easting") || k.includes("northing") ||
-      k.includes("station")
-    );
-  };
-
-  if (!firstFields.some(looksLikeHeader)) {
-    for (let i = 0; i < Math.min(lines.length, 100); i += 1) {
-      const line = lines[i];
-      const nk = normalizeKey(line);
-      const hasLat = nk.includes("latitude") || nk.includes("lat");
-      const hasLon = nk.includes("longitude") || nk.includes("lon");
-      const hasEasting = nk.includes("easting");
-      const hasNorthing = nk.includes("northing");
-
-      if ((hasLat && hasLon) || (hasEasting && hasNorthing)) {
-        const candidate = parseFrom(i);
-        const fields = Object.keys(candidate.data?.[0] || {});
-        if (fields.length >= 2) {
-          best = candidate;
-          console.info(`CSV header detected at source row ${i + 1}:`, fields);
-          break;
-        }
-      }
-    }
-  }
-
-  if (best.errors?.length) {
-    console.warn("CSV parser warnings:", best.errors.slice(0, 10));
-  }
-
-  return best.data || [];
-}
-
-/* =========================================================
    CONTROL POINT CSV
    IMPORTANT:
    EMPTY / ZERO COORDINATES ARE IGNORED
@@ -331,7 +241,15 @@ function parseControlCSV(
   text,
   epsg
 ) {
-  const rows = parseSurveyCSVRows(text);
+  const result =
+    Papa.parse(text, {
+      header: true,
+      skipEmptyLines: true,
+      dynamicTyping: false,
+    });
+
+  const rows =
+    result.data || [];
 
   const points = [];
 
@@ -524,71 +442,158 @@ function parseControlCSV(
 ========================================================= */
 
 function parseTrigCSV(text) {
-  const rows = parseSurveyCSVRows(text);
-  const points = [];
-
-  rows.forEach((row, index) => {
-    const name = cleanValue(firstExisting(row, [
-      "Station Name", "Station", "Station Name/No", "Point Name", "Point", "Name", "ID", "Point ID",
-    ]));
-
-    const stationRef = cleanValue(firstExisting(row, [
-      "Station Ref.", "Station Ref", "Station Reference", "Station No", "Ref.", "Ref", "Reference",
-    ]));
-
-    let lat = numberValue(firstExisting(row, [
-      "Latitude", "Latitude N", "Latitude (N)", "Lat", "Lat N", "Lat (N)",
-    ]));
-    let lng = numberValue(firstExisting(row, [
-      "Longitude", "Longitude E", "Longitude (E)", "Long", "Lon", "Lng", "Long E", "Lon E",
-    ]));
-
-    if (!Number.isFinite(lat)) lat = findCoordinateByHeader(row, "lat");
-    if (!Number.isFinite(lng)) lng = findCoordinateByHeader(row, "lng");
-
-    const easting = numberValue(firstExisting(row, ["Easting", "UTM Easting", "UTM_Easting", "X"]));
-    const northing = numberValue(firstExisting(row, ["Northing", "UTM Northing", "UTM_Northing", "Y"]));
-
-    const elevation = firstExisting(row, [
-      "India MSL", "India MSL (m)", "MSL", "Elevation", "Elev", "RL", "Height", "Z", "Reduced Level",
-    ]);
-
-    const remarks = cleanValue(firstExisting(row, ["Remarks", "Remark", "Description", "Comments"]));
-    const explicitType = cleanValue(firstExisting(row, ["Type", "Point Type", "Category", "Class"]));
-
-    const classificationText = [explicitType, stationRef, name, remarks].join(" ").toLowerCase();
-    const type = /\bbm\b|benchmark|bench\s*mark/.test(classificationText) ? "BM" : "TRIG";
-
-    let latLng = null;
-    if (
-      Number.isFinite(lat) && Number.isFinite(lng) &&
-      lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180 &&
-      !(lat === 0 && lng === 0)
-    ) {
-      latLng = [lat, lng];
-    }
-
-    if (!latLng) {
-      console.warn(`Ignoring invalid Trig/BM row ${index + 1}:`, row);
-      return;
-    }
-
-    points.push({
-      name: name || stationRef || `${type}-${points.length + 1}`,
-      stationRef,
-      type,
-      latitude: lat,
-      longitude: lng,
-      easting,
-      northing,
-      elevation: cleanValue(elevation),
-      remarks,
-      raw: row,
-      __latLng: latLng,
-    });
+  const result = Papa.parse(text, {
+    header: true,
+    skipEmptyLines: true,
+    dynamicTyping: false,
   });
 
-  return points;
+  const rows = result.data || [];
+
+  return rows
+    .map((row, index) => {
+      const name = cleanValue(
+        firstExisting(row, [
+          "Station Name",
+          "Station",
+          "Point Name",
+          "Point",
+          "Name",
+          "ID",
+        ])
+      );
+
+      const stationRef = cleanValue(
+        firstExisting(row, [
+          "Station Ref.",
+          "Station Ref",
+          "Station Reference",
+          "Ref.",
+          "Ref",
+          "Reference",
+        ])
+      );
+
+      const lat = numberValue(
+        firstExisting(row, [
+          "Latitude",
+          "Latitude N",
+          "Lat",
+          "Lat N",
+        ])
+      );
+
+      const lng = numberValue(
+        firstExisting(row, [
+          "Longitude",
+          "Longitude E",
+          "Long",
+          "Lon",
+          "Lng",
+          "Long E",
+        ])
+      );
+
+      const easting = numberValue(
+        firstExisting(row, [
+          "Easting",
+          "UTM Easting",
+          "X",
+        ])
+      );
+
+      const northing = numberValue(
+        firstExisting(row, [
+          "Northing",
+          "UTM Northing",
+          "Y",
+        ])
+      );
+
+      const elevation = firstExisting(row, [
+        "India MSL",
+        "MSL",
+        "Elevation",
+        "Elev",
+        "RL",
+        "Height",
+        "Z",
+        "Reduced Level",
+      ]);
+
+      const remarks = cleanValue(
+        firstExisting(row, [
+          "Remarks",
+          "Remark",
+          "Description",
+        ])
+      );
+
+      const explicitType = cleanValue(
+        firstExisting(row, [
+          "Type",
+          "Point Type",
+          "Category",
+        ])
+      );
+
+      const classificationText = [
+        explicitType,
+        stationRef,
+        name,
+        remarks,
+      ]
+        .join(" ")
+        .toLowerCase();
+
+      const type =
+        /\bbm\b|benchmark|bench mark/.test(
+          classificationText
+        )
+          ? "BM"
+          : "TRIG";
+
+      let latLng = null;
+
+      if (
+        Number.isFinite(lat) &&
+        Number.isFinite(lng) &&
+        lat !== 0 &&
+        lng !== 0 &&
+        lat >= -90 &&
+        lat <= 90 &&
+        lng >= -180 &&
+        lng <= 180
+      ) {
+        latLng = [lat, lng];
+      }
+
+      if (!latLng) {
+        console.warn(
+          `Ignoring invalid Trig/BM row ${index + 1}:`,
+          row
+        );
+        return null;
+      }
+
+      return {
+        name:
+          name ||
+          stationRef ||
+          `${type}-${index + 1}`,
+        stationRef,
+        type,
+        latitude: lat,
+        longitude: lng,
+        easting,
+        northing,
+        elevation: cleanValue(elevation),
+        remarks,
+        raw: row,
+        __latLng: latLng,
+      };
+    })
+    .filter(Boolean);
 }
 
 /* =========================================================
@@ -745,125 +750,189 @@ function parseGxTrackCoordinates(
   return coordinates;
 }
 
-function cleanKmlText(text) {
-  let value = String(text || "")
-    .replace(/^\uFEFF/, "")
-    .replace(/\r\n?/g, "\n");
+function parseCrossSectionsKML(
+  text
+) {
+  const parser =
+    new DOMParser();
 
-  /* Remove characters that can make otherwise usable survey KML fail XML parsing. */
-  value = value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "");
+  const xml =
+    parser.parseFromString(
+      text,
+      "text/xml"
+    );
 
-  /* Repair bare ampersands, but keep valid XML entities intact. */
-  value = value.replace(/&(?!amp;|lt;|gt;|quot;|apos;|#\d+;|#x[0-9a-fA-F]+;)/g, "&amp;");
-  return value;
-}
+  const errorNode =
+    xml.querySelector(
+      "parsererror"
+    );
 
-function makeLineFeature(name, coordinates) {
-  if (!Array.isArray(coordinates) || coordinates.length < 2) return null;
-  return {
-    type: "Feature",
-    properties: { name: name || "Cross Section" },
-    geometry: {
-      type: "LineString",
-      coordinates,
-    },
-  };
-}
-
-function extractCoordinatesFromRawKml(block) {
-  const matches = [];
-  const re = /<coordinates\b[^>]*>([\s\S]*?)<\/coordinates>/gi;
-  let m;
-  while ((m = re.exec(block))) {
-    const coords = parseKmlLineCoordinates(m[1]);
-    if (coords.length >= 2) matches.push(coords.map(([lat, lng]) => [lng, lat]));
+  if (errorNode) {
+    throw new Error(
+      "Invalid cross-section KML/XML file."
+    );
   }
-  return matches;
-}
 
-function parseCrossSectionsKML(text) {
-  const rawText = cleanKmlText(text);
-  if (!rawText.trim()) throw new Error("Cross-section KML is empty.");
+  const placemarks =
+    elementsByLocalName(
+      xml,
+      "Placemark"
+    );
 
-  const parser = new DOMParser();
-  const xml = parser.parseFromString(rawText, "text/xml");
-  const parserError = xml.getElementsByTagName("parsererror")[0];
   const features = [];
 
-  if (!parserError) {
-    const placemarks = elementsByLocalName(xml, "Placemark");
+  const processPlacemark = (
+    placemark,
+    fallbackIndex
+  ) => {
+    const nameElement =
+      firstElementByLocalName(
+        placemark,
+        "name"
+      );
 
-    placemarks.forEach((placemark, index) => {
-      const nameElement = firstElementByLocalName(placemark, "name");
-      const name = cleanValue(nameElement?.textContent) || `Cross Section ${index + 1}`;
-      const lineParts = [];
+    const name =
+      String(
+        nameElement?.textContent || ""
+      ).trim() ||
+      `Cross Section ${
+        fallbackIndex + 1
+      }`;
 
-      elementsByLocalName(placemark, "LineString").forEach((lineString) => {
-        const coordinatesElement = firstElementByLocalName(lineString, "coordinates");
-        const coordinates = parseKmlLineCoordinates(coordinatesElement?.textContent || "");
-        if (coordinates.length >= 2) {
-          lineParts.push(coordinates.map(([lat, lng]) => [lng, lat]));
-        }
-      });
+    const lineParts = [];
 
-      elementsByLocalName(placemark, "Track").forEach((track) => {
-        const coordinates = parseGxTrackCoordinates(track);
-        if (coordinates.length >= 2) {
-          lineParts.push(coordinates.map(([lat, lng]) => [lng, lat]));
-        }
-      });
+    /* Standard KML LineString */
+    elementsByLocalName(
+      placemark,
+      "LineString"
+    ).forEach((lineString) => {
+      const coordinatesElement =
+        firstElementByLocalName(
+          lineString,
+          "coordinates"
+        );
 
-      if (lineParts.length === 1) {
-        features.push(makeLineFeature(name, lineParts[0]));
-      } else if (lineParts.length > 1) {
-        features.push({
-          type: "Feature",
-          properties: { name },
-          geometry: { type: "MultiLineString", coordinates: lineParts },
-        });
+      const coordinates =
+        parseKmlLineCoordinates(
+          coordinatesElement?.textContent || ""
+        );
+
+      if (coordinates.length >= 2) {
+        lineParts.push(coordinates);
       }
     });
 
-    if (features.length === 0) {
-      elementsByLocalName(xml, "LineString").forEach((lineString, index) => {
-        const coordinatesElement = firstElementByLocalName(lineString, "coordinates");
-        const coordinates = parseKmlLineCoordinates(coordinatesElement?.textContent || "");
+    /* Google Earth gx:Track */
+    elementsByLocalName(
+      placemark,
+      "Track"
+    ).forEach((track) => {
+      const coordinates =
+        parseGxTrackCoordinates(
+          track
+        );
+
+      if (coordinates.length >= 2) {
+        lineParts.push(coordinates);
+      }
+    });
+
+    if (lineParts.length === 1) {
+      features.push({
+        type: "Feature",
+        properties: {
+          name,
+        },
+        geometry: {
+          type: "LineString",
+          coordinates:
+            lineParts[0].map(
+              ([lat, lng]) => [
+                lng,
+                lat,
+              ]
+            ),
+        },
+      });
+    } else if (lineParts.length > 1) {
+      features.push({
+        type: "Feature",
+        properties: {
+          name,
+        },
+        geometry: {
+          type: "MultiLineString",
+          coordinates:
+            lineParts.map((line) =>
+              line.map(
+                ([lat, lng]) => [
+                  lng,
+                  lat,
+                ]
+              )
+            ),
+        },
+      });
+    }
+  };
+
+  if (placemarks.length > 0) {
+    placemarks.forEach(
+      (placemark, index) =>
+        processPlacemark(
+          placemark,
+          index
+        )
+    );
+  } else {
+    /* Fallback for KML files without Placemark wrappers */
+    const lineStrings =
+      elementsByLocalName(
+        xml,
+        "LineString"
+      );
+
+    lineStrings.forEach(
+      (lineString, index) => {
+        const coordinatesElement =
+          firstElementByLocalName(
+            lineString,
+            "coordinates"
+          );
+
+        const coordinates =
+          parseKmlLineCoordinates(
+            coordinatesElement?.textContent || ""
+          );
+
         if (coordinates.length >= 2) {
-          features.push(makeLineFeature(`Cross Section ${index + 1}`, coordinates.map(([lat, lng]) => [lng, lat])));
+          features.push({
+            type: "Feature",
+            properties: {
+              name: `Cross Section ${
+                index + 1
+              }`,
+            },
+            geometry: {
+              type: "LineString",
+              coordinates:
+                coordinates.map(
+                  ([lat, lng]) => [
+                    lng,
+                    lat,
+                  ]
+                ),
+            },
+          });
         }
-      });
-    }
+      }
+    );
   }
 
-  /* Regex fallback: if the XML is malformed, still extract valid survey
-     coordinates directly from the KML text. This is deliberately limited to
-     LineString/coordinates content and does not execute arbitrary markup. */
-  if (features.length === 0) {
-    const placemarkRegex = /<Placemark\b[^>]*>([\s\S]*?)<\/Placemark>/gi;
-    let match;
-    let index = 0;
-
-    while ((match = placemarkRegex.exec(rawText))) {
-      const block = match[1];
-      const nameMatch = block.match(/<name\b[^>]*>([\s\S]*?)<\/name>/i);
-      const name = cleanValue(nameMatch ? nameMatch[1].replace(/<[^>]+>/g, "") : "") || `Cross Section ${index + 1}`;
-      const parts = extractCoordinatesFromRawKml(block);
-      parts.forEach((coords) => features.push(makeLineFeature(name, coords)));
-      index += 1;
-    }
-
-    if (features.length === 0) {
-      extractCoordinatesFromRawKml(rawText).forEach((coords, i) => {
-        features.push(makeLineFeature(`Cross Section ${i + 1}`, coords));
-      });
-    }
-  }
-
-  if (features.length === 0) {
-    throw new Error("No valid LineString coordinates were found in the cross-section KML.");
-  }
-
-  return { type: "FeatureCollection", features: features.filter(Boolean) };
+  return {
+    type: "FeatureCollection",
+    features,
+  };
 }
 
 /* =========================================================
