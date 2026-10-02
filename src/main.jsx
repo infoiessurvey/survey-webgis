@@ -104,7 +104,7 @@ const PROJECTS = [
 ========================================================= */
 
 const COMMON_TRIG_PATH =
-  "COMMON/TRIG_BM/trig_points.csv";
+  "COMMON/TRIG_BM/Nepal_Geodetic_Survey_Data_of Trig.csv";
 
 /* =========================================================
    PUBLIC SUPABASE STORAGE URL
@@ -441,159 +441,227 @@ function parseControlCSV(
    TRIG / BM CSV
 ========================================================= */
 
-function parseTrigCSV(text) {
-  const result = Papa.parse(text, {
-    header: true,
-    skipEmptyLines: true,
-    dynamicTyping: false,
+function normalizeHeader(value) {
+  return String(value ?? "")
+    .replace(/^\uFEFF/, "")
+    .trim()
+    .toLowerCase()
+    .replace(/[_\-./()]+/g, " ")
+    .replace(/\s+/g, " ");
+}
+
+function findHeaderIndex(rows) {
+  const headerAliases = [
+    "station name", "station", "point name", "point", "name", "id",
+    "latitude", "latitude n", "lat", "longitude", "longitude e",
+    "long", "lon", "lng", "easting", "utm easting", "northing",
+    "utm northing", "india msl", "msl", "elevation", "station ref",
+    "station reference", "reference", "ref"
+  ].map(normalizeHeader);
+
+  let bestIndex = -1;
+  let bestScore = 0;
+
+  rows.slice(0, 30).forEach((row, index) => {
+    const cells = (row || []).map(normalizeHeader);
+    const score = cells.reduce(
+      (total, cell) => total + (headerAliases.includes(cell) ? 1 : 0),
+      0
+    );
+    if (score > bestScore) {
+      bestScore = score;
+      bestIndex = index;
+    }
   });
 
-  const rows = result.data || [];
+  return bestScore >= 2 ? bestIndex : -1;
+}
 
-  return rows
-    .map((row, index) => {
-      const name = cleanValue(
-        firstExisting(row, [
-          "Station Name",
-          "Station",
-          "Point Name",
-          "Point",
-          "Name",
-          "ID",
-        ])
-      );
+function normalizedRowObject(row, headers) {
+  const object = {};
+  headers.forEach((header, index) => {
+    object[String(header || `column_${index + 1}`).trim()] = row[index] ?? "";
+  });
+  return object;
+}
 
-      const stationRef = cleanValue(
-        firstExisting(row, [
-          "Station Ref.",
-          "Station Ref",
-          "Station Reference",
-          "Ref.",
-          "Ref",
-          "Reference",
-        ])
-      );
+function trigUtmToLatLng(easting, northing, row) {
+  if (
+    !Number.isFinite(easting) ||
+    !Number.isFinite(northing) ||
+    easting < 100000 ||
+    northing < 100000
+  ) {
+    return null;
+  }
 
-      const lat = numberValue(
-        firstExisting(row, [
-          "Latitude",
-          "Latitude N",
-          "Lat",
-          "Lat N",
-        ])
-      );
+  const explicitCrs = cleanValue(firstExisting(row, [
+    "EPSG", "CRS", "Coordinate System",
+    "Coordinate Reference System", "Projection"
+  ]));
+  const zoneText = cleanValue(firstExisting(row, [
+    "Zone", "UTM Zone", "UTM_Zone"
+  ]));
 
-      const lng = numberValue(
-        firstExisting(row, [
-          "Longitude",
-          "Longitude E",
-          "Long",
-          "Lon",
-          "Lng",
-          "Long E",
-        ])
-      );
+  const epsgMatch = explicitCrs.match(/3264[45]|3274[45]/i);
+  let candidates = [];
 
-      const easting = numberValue(
-        firstExisting(row, [
-          "Easting",
-          "UTM Easting",
-          "X",
-        ])
-      );
+  if (epsgMatch) {
+    candidates = [`EPSG:${epsgMatch[0]}`];
+  } else if (/44/.test(zoneText)) {
+    candidates = ["EPSG:32644", "EPSG:32744"];
+  } else if (/45/.test(zoneText)) {
+    candidates = ["EPSG:32645", "EPSG:32745"];
+  } else {
+    // Nepal's common survey datasets typically use UTM zones 44N or 45N.
+    candidates = ["EPSG:32644", "EPSG:32645"];
+  }
 
-      const northing = numberValue(
-        firstExisting(row, [
-          "Northing",
-          "UTM Northing",
-          "Y",
-        ])
-      );
+  for (const epsg of candidates) {
+    const latLng = utmToLatLng(easting, northing, epsg);
+    if (
+      latLng &&
+      latLng[0] >= 25 &&
+      latLng[0] <= 31 &&
+      latLng[1] >= 79 &&
+      latLng[1] <= 89
+    ) {
+      return latLng;
+    }
+  }
 
-      const elevation = firstExisting(row, [
-        "India MSL",
-        "MSL",
-        "Elevation",
-        "Elev",
-        "RL",
-        "Height",
-        "Z",
-        "Reduced Level",
-      ]);
+  return null;
+}
 
-      const remarks = cleanValue(
-        firstExisting(row, [
-          "Remarks",
-          "Remark",
-          "Description",
-        ])
-      );
+function parseTrigCSV(text) {
+  const cleanText = String(text || "").replace(/^\uFEFF/, "").trim();
+  if (!cleanText) {
+    throw new Error("The Trig/BM CSV file is empty.");
+  }
 
-      const explicitType = cleanValue(
-        firstExisting(row, [
-          "Type",
-          "Point Type",
-          "Category",
-        ])
-      );
+  // Parse raw rows first so title/metadata rows before the real header
+  // do not prevent the data from loading.
+  const rawResult = Papa.parse(cleanText, {
+    header: false,
+    skipEmptyLines: "greedy",
+    dynamicTyping: false
+  });
+  const rawRows = rawResult.data || [];
+  const headerIndex = findHeaderIndex(rawRows);
 
-      const classificationText = [
-        explicitType,
-        stationRef,
-        name,
-        remarks,
-      ]
-        .join(" ")
-        .toLowerCase();
+  let rows = [];
+  if (headerIndex >= 0) {
+    const headers = (rawRows[headerIndex] || []).map((value) =>
+      String(value || "").replace(/^\uFEFF/, "").trim()
+    );
+    rows = rawRows
+      .slice(headerIndex + 1)
+      .filter((row) => row.some((value) => String(value || "").trim() !== ""))
+      .map((row) => normalizedRowObject(row, headers));
+    console.info("Trig/BM CSV header row detected:", headerIndex + 1, headers);
+  } else {
+    const parsed = Papa.parse(cleanText, {
+      header: true,
+      skipEmptyLines: true,
+      dynamicTyping: false
+    });
+    rows = parsed.data || [];
+    console.warn("Could not detect a metadata-offset header; using first row as header.");
+  }
 
-      const type =
-        /\bbm\b|benchmark|bench mark/.test(
-          classificationText
-        )
-          ? "BM"
-          : "TRIG";
+  const points = rows.map((row, index) => {
+    const name = cleanValue(firstExisting(row, [
+      "Station Name", "Station", "Point Name", "Point", "Name",
+      "ID", "Point ID", "Station ID", "Station No", "Point No"
+    ]));
 
-      let latLng = null;
+    const stationRef = cleanValue(firstExisting(row, [
+      "Station Ref.", "Station Ref", "Station Reference",
+      "Ref.", "Ref", "Reference", "Station Code"
+    ]));
 
-      if (
-        Number.isFinite(lat) &&
-        Number.isFinite(lng) &&
-        lat !== 0 &&
-        lng !== 0 &&
-        lat >= -90 &&
-        lat <= 90 &&
-        lng >= -180 &&
-        lng <= 180
-      ) {
-        latLng = [lat, lng];
-      }
+    const lat = numberValue(firstExisting(row, [
+      "Latitude", "Latitude N", "Lat", "Lat N", "Latitude (N)"
+    ]));
 
-      if (!latLng) {
-        console.warn(
-          `Ignoring invalid Trig/BM row ${index + 1}:`,
-          row
-        );
-        return null;
-      }
+    const lng = numberValue(firstExisting(row, [
+      "Longitude", "Longitude E", "Long", "Lon", "Lng",
+      "Long E", "Longitude (E)"
+    ]));
 
-      return {
-        name:
-          name ||
-          stationRef ||
-          `${type}-${index + 1}`,
-        stationRef,
-        type,
-        latitude: lat,
-        longitude: lng,
-        easting,
-        northing,
-        elevation: cleanValue(elevation),
-        remarks,
-        raw: row,
-        __latLng: latLng,
-      };
-    })
-    .filter(Boolean);
+    const easting = numberValue(firstExisting(row, [
+      "Easting", "UTM Easting", "UTM_Easting", "E", "X"
+    ]));
+
+    const northing = numberValue(firstExisting(row, [
+      "Northing", "UTM Northing", "UTM_Northing", "N", "Y"
+    ]));
+
+    const elevation = firstExisting(row, [
+      "India MSL", "MSL", "Elevation", "Elev", "RL",
+      "Height", "Z", "Reduced Level", "Orthometric Height"
+    ]);
+
+    const remarks = cleanValue(firstExisting(row, [
+      "Remarks", "Remark", "Description", "Location", "District"
+    ]));
+
+    const explicitType = cleanValue(firstExisting(row, [
+      "Type", "Point Type", "Category", "Station Type", "Class"
+    ]));
+
+    const classificationText = [
+      explicitType, stationRef, name, remarks
+    ].join(" ").toLowerCase();
+
+    const type = /\bbm\b|benchmark|bench mark|bench-mark/.test(classificationText)
+      ? "BM"
+      : "TRIG";
+
+    let latLng = null;
+    if (
+      Number.isFinite(lat) &&
+      Number.isFinite(lng) &&
+      lat !== 0 &&
+      lng !== 0 &&
+      lat >= -90 && lat <= 90 &&
+      lng >= -180 && lng <= 180
+    ) {
+      latLng = [lat, lng];
+    }
+
+    if (!latLng) {
+      latLng = trigUtmToLatLng(easting, northing, row);
+    }
+
+    if (!latLng) {
+      console.warn(`Ignoring invalid Trig/BM row ${index + 1}:`, row);
+      return null;
+    }
+
+    return {
+      name: name || stationRef || `${type}-${index + 1}`,
+      stationRef,
+      type,
+      latitude: Number.isFinite(lat) ? lat : latLng[0],
+      longitude: Number.isFinite(lng) ? lng : latLng[1],
+      easting,
+      northing,
+      elevation: cleanValue(elevation),
+      remarks,
+      raw: row,
+      __latLng: latLng
+    };
+  }).filter(Boolean);
+
+  console.info(`Trig/BM CSV parsed ${points.length} valid points from ${rows.length} data rows.`);
+  if (points.length === 0) {
+    throw new Error(
+      `CSV loaded, but no valid Trig/BM coordinates were found. Detected ${rows.length} data rows. Check the header and coordinate columns.`
+    );
+  }
+
+  return points;
 }
 
 /* =========================================================
@@ -750,26 +818,70 @@ function parseGxTrackCoordinates(
   return coordinates;
 }
 
-function parseCrossSectionsKML(
-  text
-) {
-  const parser =
-    new DOMParser();
+function parseCrossSectionsKML(text) {
+  const cleanText = String(text || "").replace(/^\uFEFF/, "").trim();
+  if (!cleanText) {
+    throw new Error("Cross-section KML file is empty.");
+  }
 
-  const xml =
-    parser.parseFromString(
-      text,
-      "text/xml"
-    );
-
-  const errorNode =
-    xml.querySelector(
-      "parsererror"
-    );
+  const parser = new DOMParser();
+  const xml = parser.parseFromString(cleanText, "text/xml");
+  const errorNode = xml.querySelector("parsererror");
 
   if (errorNode) {
+    // Some exported KML files contain unescaped characters in names or
+    // descriptions. If XML parsing fails, try extracting the standard
+    // LineString coordinate blocks directly from the KML text.
+    const fallbackFeatures = [];
+    const placemarkRegex = /<Placemark\b[^>]*>([\s\S]*?)<\/Placemark>/gi;
+    const lineRegex = /<LineString\b[^>]*>([\s\S]*?)<\/LineString>/gi;
+    let placemarkMatch;
+    let fallbackIndex = 0;
+
+    while ((placemarkMatch = placemarkRegex.exec(cleanText)) !== null) {
+      const placemarkText = placemarkMatch[1];
+      const nameMatch = placemarkText.match(/<name\b[^>]*>([\s\S]*?)<\/name>/i);
+      const name = nameMatch
+        ? nameMatch[1].replace(/<[^>]+>/g, "").trim()
+        : `Cross Section ${fallbackIndex + 1}`;
+      lineRegex.lastIndex = 0;
+      let lineMatch;
+
+      while ((lineMatch = lineRegex.exec(placemarkText)) !== null) {
+        const coordinatesMatch = lineMatch[1].match(
+          /<coordinates\b[^>]*>([\s\S]*?)<\/coordinates>/i
+        );
+        if (!coordinatesMatch) continue;
+
+        const coordinates = parseKmlLineCoordinates(coordinatesMatch[1]);
+        if (coordinates.length >= 2) {
+          fallbackFeatures.push({
+            type: "Feature",
+            properties: { name },
+            geometry: {
+              type: "LineString",
+              coordinates: coordinates.map(([lat, lng]) => [lng, lat])
+            }
+          });
+          fallbackIndex += 1;
+        }
+      }
+    }
+
+    if (fallbackFeatures.length > 0) {
+      console.warn(
+        "KML XML parser reported malformed markup; recovered line features with fallback parser.",
+        errorNode.textContent
+      );
+      return {
+        type: "FeatureCollection",
+        features: fallbackFeatures
+      };
+    }
+
+    const preview = cleanText.slice(0, 180).replace(/\s+/g, " ");
     throw new Error(
-      "Invalid cross-section KML/XML file."
+      `Invalid KML/XML and no LineString coordinates could be recovered. File preview: ${preview}`
     );
   }
 
@@ -1944,22 +2056,24 @@ function App() {
               COMMON_TRIG_PATH 
             ); 
  
-          const response = 
-            await fetch(url); 
- 
-          if (!response.ok) { 
-            throw new Error( 
-              `Trig CSV request failed (${response.status})` 
-            ); 
-          } 
- 
-          const text = 
-            await response.text(); 
- 
-          const points = 
-            parseTrigCSV( 
-              text 
-            ); 
+          console.log("Loading common Trig/BM CSV:", url);
+
+          const response = await fetch(url, { cache: "no-store" });
+          if (!response.ok) {
+            const responseText = await response.text().catch(() => "");
+            throw new Error(
+              `Trig CSV request failed (HTTP ${response.status}). ` +
+              `${responseText.slice(0, 160)} URL: ${url}`
+            );
+          }
+
+          const text = await response.text();
+          if (!text.trim()) {
+            throw new Error("Trig/BM CSV response was empty.");
+          }
+          console.log("Trig/BM CSV response preview:", text.slice(0, 250));
+
+          const points = parseTrigCSV(text); 
  
           trigPointsRef.current = 
             points; 
@@ -2013,8 +2127,9 @@ function App() {
             } 
           ); 
  
-          setStatus( 
-            `${points.length} common Trig / BM points loaded` 
+          setError("");
+          setStatus(
+            `${points.length} common Trig / BM points loaded`
           ); 
  
           console.log( 
@@ -2034,8 +2149,11 @@ function App() {
             [] 
           ); 
  
-          setStatus( 
-            "Trig / BM data unavailable" 
+          setStatus(
+            "Trig / BM data unavailable"
+          );
+          setError(
+            `Trig/BM could not be loaded: ${err?.message || String(err)}`
           ); 
         } 
       }, 
@@ -2508,15 +2626,14 @@ function App() {
               ); 
             } 
  
-            const text = 
-              await response.text(); 
- 
-            if (!text.trim()) { 
-              throw new Error( 
-                "Cross-section KML is empty." 
-              ); 
-            } 
- 
+            const text = (await response.text()).replace(/^\uFEFF/, "");
+
+            if (!text.trim()) {
+              throw new Error("Cross-section KML is empty.");
+            }
+
+            console.log("Cross-section response preview:", text.slice(0, 250));
+
             const geojson = 
               parseCrossSectionsKML( 
                 text 
