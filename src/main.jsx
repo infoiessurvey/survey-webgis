@@ -86,7 +86,7 @@ const PROJECTS = [
     epsg: "EPSG:32644",
 
     controlPath:
-      "BHERI/Control points/control points.csv",
+      "BHERI/Control points/Control points.csv",
 
     boundaryPath:
       "BHERI/Survey boundary/Survey boundary.kml",
