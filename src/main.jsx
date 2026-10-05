@@ -79,7 +79,7 @@ const PROJECTS = [
 
   {
     id: "bheri",
-    name: "Bheri Survey",
+    name: "BHERI-3 STORAGE PROJECT",
     code: "BHERI",
     year: 2026,
     location: "Salyan and Surkhet, Nepal",
