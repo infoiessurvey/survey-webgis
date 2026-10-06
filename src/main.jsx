@@ -1,4 +1,3 @@
-
 import React, {
   useCallback,
   useEffect,
@@ -68,6 +67,13 @@ const PROJECTS = [
     controlPath:
       "KANKAI/Control points/control points.csv",
 
+    /*
+      Add the Kankai boundary KML path here when available.
+
+      Example:
+      boundaryPath:
+        "KANKAI/Survey Boundary/survey_boundary.kml",
+    */
     boundaryPath: null,
 
     crossPath:
@@ -233,8 +239,6 @@ function utmToLatLng(
 
 /* =========================================================
    CONTROL POINT CSV
-   IMPORTANT:
-   EMPTY / ZERO COORDINATES ARE IGNORED
 ========================================================= */
 
 function parseControlCSV(
@@ -340,19 +344,11 @@ function parseControlCSV(
           )
         );
 
-      /* ---------------------------------------------
-         VALID UTM COORDINATES
-      --------------------------------------------- */
-
       const hasValidUTM =
         Number.isFinite(easting) &&
         Number.isFinite(northing) &&
         easting > 100000 &&
         northing > 100000;
-
-      /* ---------------------------------------------
-         VALID LAT/LONG
-      --------------------------------------------- */
 
       const hasValidLatLng =
         Number.isFinite(lat) &&
@@ -362,10 +358,6 @@ function parseControlCSV(
 
       let latLng = null;
 
-      /* ---------------------------------------------
-         UTM → WGS84
-      --------------------------------------------- */
-
       if (hasValidUTM) {
         latLng =
           utmToLatLng(
@@ -374,10 +366,6 @@ function parseControlCSV(
             epsg
           );
       }
-
-      /* ---------------------------------------------
-         FALLBACK LAT/LONG
-      --------------------------------------------- */
 
       if (
         !latLng &&
@@ -389,10 +377,6 @@ function parseControlCSV(
         ];
       }
 
-      /* ---------------------------------------------
-         IGNORE INVALID ROW
-      --------------------------------------------- */
-
       if (!latLng) {
         console.warn(
           `Ignoring invalid control point row ${
@@ -403,10 +387,6 @@ function parseControlCSV(
 
         return;
       }
-
-      /* ---------------------------------------------
-         ADD VALID CONTROL POINT
-      --------------------------------------------- */
 
       points.push({
         station:
@@ -452,40 +432,95 @@ function normalizeHeader(value) {
 
 function findHeaderIndex(rows) {
   const headerAliases = [
-    "station name", "station", "point name", "point", "name", "id",
-    "latitude", "latitude n", "lat", "longitude", "longitude e",
-    "long", "lon", "lng", "easting", "utm easting", "northing",
-    "utm northing", "india msl", "msl", "elevation", "station ref",
-    "station reference", "reference", "ref"
+    "station name",
+    "station",
+    "point name",
+    "point",
+    "name",
+    "id",
+    "latitude",
+    "latitude n",
+    "lat",
+    "longitude",
+    "longitude e",
+    "long",
+    "lon",
+    "lng",
+    "easting",
+    "utm easting",
+    "northing",
+    "utm northing",
+    "india msl",
+    "msl",
+    "elevation",
+    "station ref",
+    "station reference",
+    "reference",
+    "ref",
   ].map(normalizeHeader);
 
   let bestIndex = -1;
   let bestScore = 0;
 
-  rows.slice(0, 30).forEach((row, index) => {
-    const cells = (row || []).map(normalizeHeader);
-    const score = cells.reduce(
-      (total, cell) => total + (headerAliases.includes(cell) ? 1 : 0),
-      0
-    );
-    if (score > bestScore) {
-      bestScore = score;
-      bestIndex = index;
-    }
-  });
+  rows.slice(0, 30).forEach(
+    (row, index) => {
+      const cells =
+        (row || []).map(
+          normalizeHeader
+        );
 
-  return bestScore >= 2 ? bestIndex : -1;
+      const score =
+        cells.reduce(
+          (total, cell) =>
+            total +
+            (headerAliases.includes(
+              cell
+            )
+              ? 1
+              : 0),
+          0
+        );
+
+      if (
+        score > bestScore
+      ) {
+        bestScore = score;
+        bestIndex = index;
+      }
+    }
+  );
+
+  return bestScore >= 2
+    ? bestIndex
+    : -1;
 }
 
-function normalizedRowObject(row, headers) {
+function normalizedRowObject(
+  row,
+  headers
+) {
   const object = {};
-  headers.forEach((header, index) => {
-    object[String(header || `column_${index + 1}`).trim()] = row[index] ?? "";
-  });
+
+  headers.forEach(
+    (header, index) => {
+      object[
+        String(
+          header ||
+            `column_${index + 1}`
+        ).trim()
+      ] =
+        row[index] ?? "";
+    }
+  );
+
   return object;
 }
 
-function trigUtmToLatLng(easting, northing, row) {
+function trigUtmToLatLng(
+  easting,
+  northing,
+  row
+) {
   if (
     !Number.isFinite(easting) ||
     !Number.isFinite(northing) ||
@@ -495,30 +530,72 @@ function trigUtmToLatLng(easting, northing, row) {
     return null;
   }
 
-  const explicitCrs = cleanValue(firstExisting(row, [
-    "EPSG", "CRS", "Coordinate System",
-    "Coordinate Reference System", "Projection"
-  ]));
-  const zoneText = cleanValue(firstExisting(row, [
-    "Zone", "UTM Zone", "UTM_Zone"
-  ]));
+  const explicitCrs =
+    cleanValue(
+      firstExisting(
+        row,
+        [
+          "EPSG",
+          "CRS",
+          "Coordinate System",
+          "Coordinate Reference System",
+          "Projection",
+        ]
+      )
+    );
 
-  const epsgMatch = explicitCrs.match(/3264[45]|3274[45]/i);
+  const zoneText =
+    cleanValue(
+      firstExisting(
+        row,
+        [
+          "Zone",
+          "UTM Zone",
+          "UTM_Zone",
+        ]
+      )
+    );
+
+  const epsgMatch =
+    explicitCrs.match(
+      /3264[45]|3274[45]/i
+    );
+
   let candidates = [];
 
   if (epsgMatch) {
-    candidates = [`EPSG:${epsgMatch[0]}`];
-  } else if (/44/.test(zoneText)) {
-    candidates = ["EPSG:32644", "EPSG:32744"];
-  } else if (/45/.test(zoneText)) {
-    candidates = ["EPSG:32645", "EPSG:32745"];
+    candidates = [
+      `EPSG:${epsgMatch[0]}`,
+    ];
+  } else if (
+    /44/.test(zoneText)
+  ) {
+    candidates = [
+      "EPSG:32644",
+      "EPSG:32744",
+    ];
+  } else if (
+    /45/.test(zoneText)
+  ) {
+    candidates = [
+      "EPSG:32645",
+      "EPSG:32745",
+    ];
   } else {
-    // Nepal's common survey datasets typically use UTM zones 44N or 45N.
-    candidates = ["EPSG:32644", "EPSG:32645"];
+    candidates = [
+      "EPSG:32644",
+      "EPSG:32645",
+    ];
   }
 
   for (const epsg of candidates) {
-    const latLng = utmToLatLng(easting, northing, epsg);
+    const latLng =
+      utmToLatLng(
+        easting,
+        northing,
+        epsg
+      );
+
     if (
       latLng &&
       latLng[0] >= 25 &&
@@ -534,128 +611,352 @@ function trigUtmToLatLng(easting, northing, row) {
 }
 
 function parseTrigCSV(text) {
-  const cleanText = String(text || "").replace(/^\uFEFF/, "").trim();
+  const cleanText =
+    String(text || "")
+      .replace(/^\uFEFF/, "")
+      .trim();
+
   if (!cleanText) {
-    throw new Error("The Trig/BM CSV file is empty.");
+    throw new Error(
+      "The Trig/BM CSV file is empty."
+    );
   }
 
-  // Parse raw rows first so title/metadata rows before the real header
-  // do not prevent the data from loading.
-  const rawResult = Papa.parse(cleanText, {
-    header: false,
-    skipEmptyLines: "greedy",
-    dynamicTyping: false
-  });
-  const rawRows = rawResult.data || [];
-  const headerIndex = findHeaderIndex(rawRows);
+  const rawResult =
+    Papa.parse(
+      cleanText,
+      {
+        header: false,
+        skipEmptyLines: "greedy",
+        dynamicTyping: false,
+      }
+    );
+
+  const rawRows =
+    rawResult.data || [];
+
+  const headerIndex =
+    findHeaderIndex(
+      rawRows
+    );
 
   let rows = [];
+
   if (headerIndex >= 0) {
-    const headers = (rawRows[headerIndex] || []).map((value) =>
-      String(value || "").replace(/^\uFEFF/, "").trim()
+    const headers =
+      (
+        rawRows[
+          headerIndex
+        ] || []
+      ).map(
+        (value) =>
+          String(
+            value || ""
+          )
+            .replace(
+              /^\uFEFF/,
+              ""
+            )
+            .trim()
+      );
+
+    rows =
+      rawRows
+        .slice(
+          headerIndex + 1
+        )
+        .filter(
+          (row) =>
+            row.some(
+              (value) =>
+                String(
+                  value || ""
+                ).trim() !== ""
+            )
+        )
+        .map(
+          (row) =>
+            normalizedRowObject(
+              row,
+              headers
+            )
+        );
+
+    console.info(
+      "Trig/BM CSV header row detected:",
+      headerIndex + 1,
+      headers
     );
-    rows = rawRows
-      .slice(headerIndex + 1)
-      .filter((row) => row.some((value) => String(value || "").trim() !== ""))
-      .map((row) => normalizedRowObject(row, headers));
-    console.info("Trig/BM CSV header row detected:", headerIndex + 1, headers);
   } else {
-    const parsed = Papa.parse(cleanText, {
-      header: true,
-      skipEmptyLines: true,
-      dynamicTyping: false
-    });
-    rows = parsed.data || [];
-    console.warn("Could not detect a metadata-offset header; using first row as header.");
+    const parsed =
+      Papa.parse(
+        cleanText,
+        {
+          header: true,
+          skipEmptyLines: true,
+          dynamicTyping: false,
+        }
+      );
+
+    rows =
+      parsed.data || [];
+
+    console.warn(
+      "Could not detect a metadata-offset header; using first row as header."
+    );
   }
 
-  const points = rows.map((row, index) => {
-    const name = cleanValue(firstExisting(row, [
-      "Station Name", "Station", "Point Name", "Point", "Name",
-      "ID", "Point ID", "Station ID", "Station No", "Point No"
-    ]));
+  const points =
+    rows
+      .map(
+        (row, index) => {
+          const name =
+            cleanValue(
+              firstExisting(
+                row,
+                [
+                  "Station Name",
+                  "Station",
+                  "Point Name",
+                  "Point",
+                  "Name",
+                  "ID",
+                  "Point ID",
+                  "Station ID",
+                  "Station No",
+                  "Point No",
+                ]
+              )
+            );
 
-    const stationRef = cleanValue(firstExisting(row, [
-      "Station Ref.", "Station Ref", "Station Reference",
-      "Ref.", "Ref", "Reference", "Station Code"
-    ]));
+          const stationRef =
+            cleanValue(
+              firstExisting(
+                row,
+                [
+                  "Station Ref.",
+                  "Station Ref",
+                  "Station Reference",
+                  "Ref.",
+                  "Ref",
+                  "Reference",
+                  "Station Code",
+                ]
+              )
+            );
 
-    const lat = numberValue(firstExisting(row, [
-      "Latitude", "Latitude N", "Lat", "Lat N", "Latitude (N)"
-    ]));
+          const lat =
+            numberValue(
+              firstExisting(
+                row,
+                [
+                  "Latitude",
+                  "Latitude N",
+                  "Lat",
+                  "Lat N",
+                  "Latitude (N)",
+                ]
+              )
+            );
 
-    const lng = numberValue(firstExisting(row, [
-      "Longitude", "Longitude E", "Long", "Lon", "Lng",
-      "Long E", "Longitude (E)"
-    ]));
+          const lng =
+            numberValue(
+              firstExisting(
+                row,
+                [
+                  "Longitude",
+                  "Longitude E",
+                  "Long",
+                  "Lon",
+                  "Lng",
+                  "Long E",
+                  "Longitude (E)",
+                ]
+              )
+            );
 
-    const easting = numberValue(firstExisting(row, [
-      "Easting", "UTM Easting", "UTM_Easting", "E", "X"
-    ]));
+          const easting =
+            numberValue(
+              firstExisting(
+                row,
+                [
+                  "Easting",
+                  "UTM Easting",
+                  "UTM_Easting",
+                  "E",
+                  "X",
+                ]
+              )
+            );
 
-    const northing = numberValue(firstExisting(row, [
-      "Northing", "UTM Northing", "UTM_Northing", "N", "Y"
-    ]));
+          const northing =
+            numberValue(
+              firstExisting(
+                row,
+                [
+                  "Northing",
+                  "UTM Northing",
+                  "UTM_Northing",
+                  "N",
+                  "Y",
+                ]
+              )
+            );
 
-    const elevation = firstExisting(row, [
-      "India MSL", "MSL", "Elevation", "Elev", "RL",
-      "Height", "Z", "Reduced Level", "Orthometric Height"
-    ]);
+          const elevation =
+            firstExisting(
+              row,
+              [
+                "India MSL",
+                "MSL",
+                "Elevation",
+                "Elev",
+                "RL",
+                "Height",
+                "Z",
+                "Reduced Level",
+                "Orthometric Height",
+              ]
+            );
 
-    const remarks = cleanValue(firstExisting(row, [
-      "Remarks", "Remark", "Description", "Location", "District"
-    ]));
+          const remarks =
+            cleanValue(
+              firstExisting(
+                row,
+                [
+                  "Remarks",
+                  "Remark",
+                  "Description",
+                  "Location",
+                  "District",
+                ]
+              )
+            );
 
-    const explicitType = cleanValue(firstExisting(row, [
-      "Type", "Point Type", "Category", "Station Type", "Class"
-    ]));
+          const explicitType =
+            cleanValue(
+              firstExisting(
+                row,
+                [
+                  "Type",
+                  "Point Type",
+                  "Category",
+                  "Station Type",
+                  "Class",
+                ]
+              )
+            );
 
-    const classificationText = [
-      explicitType, stationRef, name, remarks
-    ].join(" ").toLowerCase();
+          const classificationText =
+            [
+              explicitType,
+              stationRef,
+              name,
+              remarks,
+            ]
+              .join(" ")
+              .toLowerCase();
 
-    const type = /\bbm\b|benchmark|bench mark|bench-mark/.test(classificationText)
-      ? "BM"
-      : "TRIG";
+          const type =
+            /\bbm\b|benchmark|bench mark|bench-mark/.test(
+              classificationText
+            )
+              ? "BM"
+              : "TRIG";
 
-    let latLng = null;
-    if (
-      Number.isFinite(lat) &&
-      Number.isFinite(lng) &&
-      lat !== 0 &&
-      lng !== 0 &&
-      lat >= -90 && lat <= 90 &&
-      lng >= -180 && lng <= 180
-    ) {
-      latLng = [lat, lng];
-    }
+          let latLng = null;
 
-    if (!latLng) {
-      latLng = trigUtmToLatLng(easting, northing, row);
-    }
+          if (
+            Number.isFinite(
+              lat
+            ) &&
+            Number.isFinite(
+              lng
+            ) &&
+            lat !== 0 &&
+            lng !== 0 &&
+            lat >= -90 &&
+            lat <= 90 &&
+            lng >= -180 &&
+            lng <= 180
+          ) {
+            latLng = [
+              lat,
+              lng,
+            ];
+          }
 
-    if (!latLng) {
-      console.warn(`Ignoring invalid Trig/BM row ${index + 1}:`, row);
-      return null;
-    }
+          if (!latLng) {
+            latLng =
+              trigUtmToLatLng(
+                easting,
+                northing,
+                row
+              );
+          }
 
-    return {
-      name: name || stationRef || `${type}-${index + 1}`,
-      stationRef,
-      type,
-      latitude: Number.isFinite(lat) ? lat : latLng[0],
-      longitude: Number.isFinite(lng) ? lng : latLng[1],
-      easting,
-      northing,
-      elevation: cleanValue(elevation),
-      remarks,
-      raw: row,
-      __latLng: latLng
-    };
-  }).filter(Boolean);
+          if (!latLng) {
+            console.warn(
+              `Ignoring invalid Trig/BM row ${
+                index + 1
+              }:`,
+              row
+            );
 
-  console.info(`Trig/BM CSV parsed ${points.length} valid points from ${rows.length} data rows.`);
-  if (points.length === 0) {
+            return null;
+          }
+
+          return {
+            name:
+              name ||
+              stationRef ||
+              `${type}-${index + 1}`,
+
+            stationRef,
+
+            type,
+
+            latitude:
+              Number.isFinite(
+                lat
+              )
+                ? lat
+                : latLng[0],
+
+            longitude:
+              Number.isFinite(
+                lng
+              )
+                ? lng
+                : latLng[1],
+
+            easting,
+
+            northing,
+
+            elevation:
+              cleanValue(
+                elevation
+              ),
+
+            remarks,
+
+            raw: row,
+
+            __latLng:
+              latLng,
+          };
+        }
+      )
+      .filter(Boolean);
+
+  console.info(
+    `Trig/BM CSV parsed ${points.length} valid points from ${rows.length} data rows.`
+  );
+
+  if (
+    points.length === 0
+  ) {
     throw new Error(
       `CSV loaded, but no valid Trig/BM coordinates were found. Detected ${rows.length} data rows. Check the header and coordinate columns.`
     );
@@ -696,11 +997,6 @@ function kmlTextToGeoJSON(
 
 /* =========================================================
    ROBUST CROSS-SECTION KML PARSER
-
-   Some survey KML files are valid KML but are not converted
-   reliably by @tmcw/togeojson (especially MultiGeometry /
-   LineString combinations). Cross sections are therefore
-   parsed separately as Leaflet-friendly GeoJSON.
 ========================================================= */
 
 function elementsByLocalName(
@@ -718,15 +1014,26 @@ function elementsByLocalName(
       ? root.getElementsByTagName("*")
       : [];
 
-  for (let i = 0; i < all.length; i += 1) {
-    const element = all[i];
+  for (
+    let i = 0;
+    i < all.length;
+    i += 1
+  ) {
+    const element =
+      all[i];
 
     if (
-      String(element.localName || element.tagName)
-        .toLowerCase() ===
-      String(wantedName).toLowerCase()
+      String(
+        element.localName ||
+          element.tagName
+      ).toLowerCase() ===
+      String(
+        wantedName
+      ).toLowerCase()
     ) {
-      result.push(element);
+      result.push(
+        element
+      );
     }
   }
 
@@ -750,33 +1057,44 @@ function parseKmlLineCoordinates(
 ) {
   const coordinates = [];
 
-  const tokens = String(
-    coordinatesText || ""
-  )
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean);
+  const tokens =
+    String(
+      coordinatesText || ""
+    )
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
 
-  tokens.forEach((token) => {
-    const parts = token.split(",");
+  tokens.forEach(
+    (token) => {
+      const parts =
+        token.split(",");
 
-    const longitude = Number(parts[0]);
-    const latitude = Number(parts[1]);
+      const longitude =
+        Number(parts[0]);
 
-    if (
-      Number.isFinite(latitude) &&
-      Number.isFinite(longitude) &&
-      latitude >= -90 &&
-      latitude <= 90 &&
-      longitude >= -180 &&
-      longitude <= 180
-    ) {
-      coordinates.push([
-        latitude,
-        longitude,
-      ]);
+      const latitude =
+        Number(parts[1]);
+
+      if (
+        Number.isFinite(
+          latitude
+        ) &&
+        Number.isFinite(
+          longitude
+        ) &&
+        latitude >= -90 &&
+        latitude <= 90 &&
+        longitude >= -180 &&
+        longitude <= 180
+      ) {
+        coordinates.push([
+          latitude,
+          longitude,
+        ]);
+      }
     }
-  });
+  );
 
   return coordinates;
 }
@@ -789,97 +1107,198 @@ function parseGxTrackCoordinates(
   elementsByLocalName(
     trackElement,
     "coord"
-  ).forEach((coordElement) => {
-    const parts = String(
-      coordElement.textContent || ""
-    )
-      .trim()
-      .split(/\s+/)
-      .filter(Boolean);
+  ).forEach(
+    (coordElement) => {
+      const parts =
+        String(
+          coordElement.textContent ||
+            ""
+        )
+          .trim()
+          .split(/\s+/)
+          .filter(Boolean);
 
-    const longitude = Number(parts[0]);
-    const latitude = Number(parts[1]);
+      const longitude =
+        Number(parts[0]);
 
-    if (
-      Number.isFinite(latitude) &&
-      Number.isFinite(longitude) &&
-      latitude >= -90 &&
-      latitude <= 90 &&
-      longitude >= -180 &&
-      longitude <= 180
-    ) {
-      coordinates.push([
-        latitude,
-        longitude,
-      ]);
+      const latitude =
+        Number(parts[1]);
+
+      if (
+        Number.isFinite(
+          latitude
+        ) &&
+        Number.isFinite(
+          longitude
+        ) &&
+        latitude >= -90 &&
+        latitude <= 90 &&
+        longitude >= -180 &&
+        longitude <= 180
+      ) {
+        coordinates.push([
+          latitude,
+          longitude,
+        ]);
+      }
     }
-  });
+  );
 
   return coordinates;
 }
 
-function parseCrossSectionsKML(text) {
-  const cleanText = String(text || "").replace(/^\uFEFF/, "").trim();
+function parseCrossSectionsKML(
+  text
+) {
+  const cleanText =
+    String(text || "")
+      .replace(/^\uFEFF/, "")
+      .trim();
+
   if (!cleanText) {
-    throw new Error("Cross-section KML file is empty.");
+    throw new Error(
+      "Cross-section KML file is empty."
+    );
   }
 
-  const parser = new DOMParser();
-  const xml = parser.parseFromString(cleanText, "text/xml");
-  const errorNode = xml.querySelector("parsererror");
+  const parser =
+    new DOMParser();
+
+  const xml =
+    parser.parseFromString(
+      cleanText,
+      "text/xml"
+    );
+
+  const errorNode =
+    xml.querySelector(
+      "parsererror"
+    );
 
   if (errorNode) {
-    // Some exported KML files contain unescaped characters in names or
-    // descriptions. If XML parsing fails, try extracting the standard
-    // LineString coordinate blocks directly from the KML text.
     const fallbackFeatures = [];
-    const placemarkRegex = /<Placemark\b[^>]*>([\s\S]*?)<\/Placemark>/gi;
-    const lineRegex = /<LineString\b[^>]*>([\s\S]*?)<\/LineString>/gi;
+
+    const placemarkRegex =
+      /<Placemark\b[^>]*>([\s\S]*?)<\/Placemark>/gi;
+
+    const lineRegex =
+      /<LineString\b[^>]*>([\s\S]*?)<\/LineString>/gi;
+
     let placemarkMatch;
+
     let fallbackIndex = 0;
 
-    while ((placemarkMatch = placemarkRegex.exec(cleanText)) !== null) {
-      const placemarkText = placemarkMatch[1];
-      const nameMatch = placemarkText.match(/<name\b[^>]*>([\s\S]*?)<\/name>/i);
-      const name = nameMatch
-        ? nameMatch[1].replace(/<[^>]+>/g, "").trim()
-        : `Cross Section ${fallbackIndex + 1}`;
-      lineRegex.lastIndex = 0;
+    while (
+      (placemarkMatch =
+        placemarkRegex.exec(
+          cleanText
+        )) !== null
+    ) {
+      const placemarkText =
+        placemarkMatch[1];
+
+      const nameMatch =
+        placemarkText.match(
+          /<name\b[^>]*>([\s\S]*?)<\/name>/i
+        );
+
+      const name =
+        nameMatch
+          ? nameMatch[1]
+              .replace(
+                /<[^>]+>/g,
+                ""
+              )
+              .trim()
+          : `Cross Section ${
+              fallbackIndex + 1
+            }`;
+
+      lineRegex.lastIndex =
+        0;
+
       let lineMatch;
 
-      while ((lineMatch = lineRegex.exec(placemarkText)) !== null) {
-        const coordinatesMatch = lineMatch[1].match(
-          /<coordinates\b[^>]*>([\s\S]*?)<\/coordinates>/i
-        );
-        if (!coordinatesMatch) continue;
+      while (
+        (lineMatch =
+          lineRegex.exec(
+            placemarkText
+          )) !== null
+      ) {
+        const coordinatesMatch =
+          lineMatch[1].match(
+            /<coordinates\b[^>]*>([\s\S]*?)<\/coordinates>/i
+          );
 
-        const coordinates = parseKmlLineCoordinates(coordinatesMatch[1]);
-        if (coordinates.length >= 2) {
+        if (
+          !coordinatesMatch
+        ) {
+          continue;
+        }
+
+        const coordinates =
+          parseKmlLineCoordinates(
+            coordinatesMatch[1]
+          );
+
+        if (
+          coordinates.length >=
+          2
+        ) {
           fallbackFeatures.push({
             type: "Feature",
-            properties: { name },
+
+            properties: {
+              name,
+            },
+
             geometry: {
               type: "LineString",
-              coordinates: coordinates.map(([lat, lng]) => [lng, lat])
-            }
+
+              coordinates:
+                coordinates.map(
+                  ([
+                    lat,
+                    lng,
+                  ]) => [
+                    lng,
+                    lat,
+                  ]
+                ),
+            },
           });
-          fallbackIndex += 1;
+
+          fallbackIndex +=
+            1;
         }
       }
     }
 
-    if (fallbackFeatures.length > 0) {
+    if (
+      fallbackFeatures.length >
+      0
+    ) {
       console.warn(
         "KML XML parser reported malformed markup; recovered line features with fallback parser.",
         errorNode.textContent
       );
+
       return {
         type: "FeatureCollection",
-        features: fallbackFeatures
+
+        features:
+          fallbackFeatures,
       };
     }
 
-    const preview = cleanText.slice(0, 180).replace(/\s+/g, " ");
+    const preview =
+      cleanText
+        .slice(0, 180)
+        .replace(
+          /\s+/g,
+          " "
+        );
+
     throw new Error(
       `Invalid KML/XML and no LineString coordinates could be recovered. File preview: ${preview}`
     );
@@ -905,7 +1324,8 @@ function parseCrossSectionsKML(text) {
 
     const name =
       String(
-        nameElement?.textContent || ""
+        nameElement?.textContent ||
+          ""
       ).trim() ||
       `Cross Section ${
         fallbackIndex + 1
@@ -913,99 +1333,11 @@ function parseCrossSectionsKML(text) {
 
     const lineParts = [];
 
-    /* Standard KML LineString */
     elementsByLocalName(
       placemark,
       "LineString"
-    ).forEach((lineString) => {
-      const coordinatesElement =
-        firstElementByLocalName(
-          lineString,
-          "coordinates"
-        );
-
-      const coordinates =
-        parseKmlLineCoordinates(
-          coordinatesElement?.textContent || ""
-        );
-
-      if (coordinates.length >= 2) {
-        lineParts.push(coordinates);
-      }
-    });
-
-    /* Google Earth gx:Track */
-    elementsByLocalName(
-      placemark,
-      "Track"
-    ).forEach((track) => {
-      const coordinates =
-        parseGxTrackCoordinates(
-          track
-        );
-
-      if (coordinates.length >= 2) {
-        lineParts.push(coordinates);
-      }
-    });
-
-    if (lineParts.length === 1) {
-      features.push({
-        type: "Feature",
-        properties: {
-          name,
-        },
-        geometry: {
-          type: "LineString",
-          coordinates:
-            lineParts[0].map(
-              ([lat, lng]) => [
-                lng,
-                lat,
-              ]
-            ),
-        },
-      });
-    } else if (lineParts.length > 1) {
-      features.push({
-        type: "Feature",
-        properties: {
-          name,
-        },
-        geometry: {
-          type: "MultiLineString",
-          coordinates:
-            lineParts.map((line) =>
-              line.map(
-                ([lat, lng]) => [
-                  lng,
-                  lat,
-                ]
-              )
-            ),
-        },
-      });
-    }
-  };
-
-  if (placemarks.length > 0) {
-    placemarks.forEach(
-      (placemark, index) =>
-        processPlacemark(
-          placemark,
-          index
-        )
-    );
-  } else {
-    /* Fallback for KML files without Placemark wrappers */
-    const lineStrings =
-      elementsByLocalName(
-        xml,
-        "LineString"
-      );
-
-    lineStrings.forEach(
-      (lineString, index) => {
+    ).forEach(
+      (lineString) => {
         const coordinatesElement =
           firstElementByLocalName(
             lineString,
@@ -1014,22 +1346,157 @@ function parseCrossSectionsKML(text) {
 
         const coordinates =
           parseKmlLineCoordinates(
-            coordinatesElement?.textContent || ""
+            coordinatesElement?.textContent ||
+              ""
           );
 
-        if (coordinates.length >= 2) {
+        if (
+          coordinates.length >=
+          2
+        ) {
+          lineParts.push(
+            coordinates
+          );
+        }
+      }
+    );
+
+    elementsByLocalName(
+      placemark,
+      "Track"
+    ).forEach(
+      (track) => {
+        const coordinates =
+          parseGxTrackCoordinates(
+            track
+          );
+
+        if (
+          coordinates.length >=
+          2
+        ) {
+          lineParts.push(
+            coordinates
+          );
+        }
+      }
+    );
+
+    if (
+      lineParts.length === 1
+    ) {
+      features.push({
+        type: "Feature",
+
+        properties: {
+          name,
+        },
+
+        geometry: {
+          type: "LineString",
+
+          coordinates:
+            lineParts[0].map(
+              ([
+                lat,
+                lng,
+              ]) => [
+                lng,
+                lat,
+              ]
+            ),
+        },
+      });
+    } else if (
+      lineParts.length > 1
+    ) {
+      features.push({
+        type: "Feature",
+
+        properties: {
+          name,
+        },
+
+        geometry: {
+          type: "MultiLineString",
+
+          coordinates:
+            lineParts.map(
+              (line) =>
+                line.map(
+                  ([
+                    lat,
+                    lng,
+                  ]) => [
+                    lng,
+                    lat,
+                  ]
+                )
+            ),
+        },
+      });
+    }
+  };
+
+  if (
+    placemarks.length > 0
+  ) {
+    placemarks.forEach(
+      (
+        placemark,
+        index
+      ) =>
+        processPlacemark(
+          placemark,
+          index
+        )
+    );
+  } else {
+    const lineStrings =
+      elementsByLocalName(
+        xml,
+        "LineString"
+      );
+
+    lineStrings.forEach(
+      (
+        lineString,
+        index
+      ) => {
+        const coordinatesElement =
+          firstElementByLocalName(
+            lineString,
+            "coordinates"
+          );
+
+        const coordinates =
+          parseKmlLineCoordinates(
+            coordinatesElement?.textContent ||
+              ""
+          );
+
+        if (
+          coordinates.length >=
+          2
+        ) {
           features.push({
             type: "Feature",
+
             properties: {
               name: `Cross Section ${
                 index + 1
               }`,
             },
+
             geometry: {
               type: "LineString",
+
               coordinates:
                 coordinates.map(
-                  ([lat, lng]) => [
+                  ([
+                    lat,
+                    lng,
+                  ]) => [
                     lng,
                     lat,
                   ]
@@ -1531,6 +1998,218 @@ function trigPopup(
 }
 
 /* =========================================================
+   SURVEY BOUNDARY POPUP
+========================================================= */
+
+function boundaryPopup(
+  project
+) {
+  return `
+    <div class="popup boundary-popup">
+
+      <h3
+        style="
+          margin:0 0 5px 0;
+          font-size:16px;
+          line-height:1.3;
+        "
+      >
+        ${escapeHtml(
+          project.name
+        )}
+      </h3>
+
+      <div
+        style="
+          font-size:8px;
+          color:#667085;
+          margin-bottom:9px;
+          font-weight:700;
+          letter-spacing:0.4px;
+        "
+      >
+        SURVEY BOUNDARY
+      </div>
+
+      <div class="attrs">
+
+        <div class="prow">
+          <b>Project</b>
+          <span>
+            ${escapeHtml(
+              project.name
+            )}
+          </span>
+        </div>
+
+        <div class="prow">
+          <b>Project Code</b>
+          <span>
+            ${escapeHtml(
+              project.code
+            )}
+          </span>
+        </div>
+
+        <div class="prow">
+          <b>Location</b>
+          <span>
+            ${escapeHtml(
+              project.location
+            )}
+          </span>
+        </div>
+
+        <div class="prow">
+          <b>Survey Year</b>
+          <span>
+            ${escapeHtml(
+              project.year
+            )}
+          </span>
+        </div>
+
+        <div class="prow">
+          <b>Coordinate System</b>
+          <span>
+            ${escapeHtml(
+              project.epsg
+            )}
+          </span>
+        </div>
+
+      </div>
+
+    </div>
+  `;
+}
+
+/* =========================================================
+   REUSABLE SURVEY BOUNDARY LAYER
+========================================================= */
+
+function createBoundaryLayer(
+  geojson,
+  project,
+  options = {}
+) {
+  const layer =
+    L.geoJSON(
+      geojson,
+      {
+        pane:
+          "boundaryPane",
+
+        /*
+          IMPORTANT:
+          Boundary must remain interactive so
+          user can click it.
+        */
+        interactive: true,
+
+        style: {
+          color:
+            "#f59e0b",
+
+          weight: 3,
+
+          opacity:
+            0.95,
+
+          fillColor:
+            "#f59e0b",
+
+          fillOpacity:
+            0.08,
+
+          lineCap:
+            "round",
+
+          lineJoin:
+            "round",
+        },
+
+        onEachFeature:
+          (
+            feature,
+            featureLayer
+          ) => {
+            featureLayer.bindPopup(
+              boundaryPopup(
+                project
+              ),
+              {
+                maxWidth: 380,
+
+                minWidth: 270,
+
+                autoPan:
+                  true,
+
+                closeButton:
+                  true,
+              }
+            );
+
+            /*
+              Highlight boundary on hover.
+            */
+            featureLayer.on(
+              "mouseover",
+              () => {
+                featureLayer.setStyle({
+                  weight: 5,
+
+                  opacity:
+                    1,
+
+                  fillOpacity:
+                    0.16,
+                });
+
+                if (
+                  featureLayer.bringToFront
+                ) {
+                  featureLayer.bringToFront();
+                }
+              }
+            );
+
+            featureLayer.on(
+              "mouseout",
+              () => {
+                featureLayer.setStyle({
+                  weight: 3,
+
+                  opacity:
+                    0.95,
+
+                  fillOpacity:
+                    0.08,
+                });
+              }
+            );
+
+            /*
+              Make sure clicking the polygon/line
+              opens the project information.
+            */
+            featureLayer.on(
+              "click",
+              () => {
+                featureLayer.openPopup();
+              }
+            );
+          },
+
+        ...options,
+      }
+    );
+
+  return layer;
+}
+
+/* =========================================================
    LAYER GROUP BOUNDS
 ========================================================= */
 
@@ -1699,8 +2378,6 @@ function App() {
   const trigGroupRef =
     useRef(null);
 
-  // Keep Trig/BM data outside React state so loading it
-  // does not cause the overview map to rebuild/blink.
   const trigPointsRef =
     useRef([]);
 
@@ -1812,11 +2489,18 @@ function App() {
         "boundaryPane"
       );
 
+    /*
+      Increased z-index so boundary is clearly visible
+      above the base map and remains clickable.
+    */
     boundaryPane.style.zIndex =
-      200;
+      400;
 
-    boundaryPane.style.pointerEvents =
-      "none";
+    /*
+      IMPORTANT:
+      Do NOT use pointerEvents = "none".
+      The boundary needs to receive mouse clicks.
+    */
 
     const crossPane =
       map.createPane(
@@ -1859,7 +2543,9 @@ function App() {
         "https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}",
         {
           maxZoom: 21,
+
           maxNativeZoom: 20,
+
           attribution:
             "&copy; Google",
         }
@@ -1871,2085 +2557,2228 @@ function App() {
 
     const googleStreet =
       L.tileLayer(
-        "https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}", 
-        { 
-          maxZoom: 21, 
-          maxNativeZoom: 20, 
-          attribution: 
-            "&copy; Google", 
-        } 
-      ); 
- 
-    googleSatellite.addTo( 
-      map 
-    ); 
- 
-    /* --------------------------------------------- 
-       GROUPS 
-    --------------------------------------------- */ 
- 
-    const boundaryGroup = 
-      L.layerGroup().addTo( 
-        map 
-      ); 
- 
-    const crossGroup = 
-      L.layerGroup().addTo( 
-        map 
-      ); 
- 
-    const trigGroup = 
-      L.layerGroup().addTo( 
-        map 
-      ); 
- 
-    const controlGroup = 
-      L.layerGroup().addTo( 
-        map 
-      ); 
- 
-    const uploadGroup = 
-      L.layerGroup().addTo( 
-        map 
-      ); 
- 
-    boundaryGroupRef.current = 
-      boundaryGroup; 
- 
-    crossGroupRef.current = 
-      crossGroup; 
- 
-    trigGroupRef.current = 
-      trigGroup; 
- 
-    controlGroupRef.current = 
-      controlGroup; 
- 
-    uploadGroupRef.current = 
-      uploadGroup; 
- 
-    /* --------------------------------------------- 
-       LAYER CONTROL 
-    --------------------------------------------- */ 
- 
-    layerControlRef.current = 
-      L.control 
-        .layers( 
-          { 
-            "Google Satellite": 
-              googleSatellite, 
- 
-            "Google Street Map": 
-              googleStreet, 
-          }, 
-          { 
-            "Survey Boundary": 
-              boundaryGroup, 
- 
-            "Cross Sections": 
-              crossGroup, 
- 
-            "Trig / BM": 
-              trigGroup, 
- 
-            "Control Points": 
-              controlGroup, 
- 
-            "Uploaded Data": 
-              uploadGroup, 
-          }, 
-          { 
-            collapsed: false, 
-            position: 
-              "topright", 
-          } 
-        ) 
-        .addTo(map); 
- 
-    /* --------------------------------------------- 
-       MEASUREMENT 
-    --------------------------------------------- */ 
- 
-    try { 
-      L.control 
-        .measure({ 
-          position: 
-            "topleft", 
- 
-          primaryLengthUnit: 
-            "kilometers", 
- 
-          secondaryLengthUnit: 
-            "meters", 
- 
-          primaryAreaUnit: 
-            "hectares", 
- 
-          secondaryAreaUnit: 
-            "sqmeters", 
- 
-          activeColor: 
-            "#3388ff", 
- 
-          completedColor: 
-            "#3388ff", 
- 
-          captureZIndex: 
-            10000, 
-        }) 
-        .addTo(map); 
-    } catch ( 
-      measurementError 
-    ) { 
-      console.warn( 
-        "Measurement tool could not initialize:", 
-        measurementError 
-      ); 
-    } 
- 
-    /* --------------------------------------------- 
-       DEFAULT NEPAL VIEW 
-    --------------------------------------------- */ 
- 
-    map.setView( 
-      [ 
-        28.3949, 
-        84.124, 
-      ], 
-      7 
-    ); 
- 
-    /* --------------------------------------------- 
-       FORCE MAP SIZE 
-    --------------------------------------------- */ 
- 
-    setTimeout(() => { 
-      map.invalidateSize(); 
-    }, 300); 
- 
-    /* --------------------------------------------- 
-       CLEANUP 
-    --------------------------------------------- */ 
- 
-    return () => { 
-      map.remove(); 
- 
-      mapRef.current = 
-        null; 
-    }; 
-  }, []); 
- 
-  /* ======================================================= 
-     LOAD TRIG / BM 
-  ======================================================= */ 
- 
-  const loadTrigPoints = 
-    useCallback( 
-      async () => { 
-        try { 
-          setStatus( 
-            "Loading common Trig / BM data..." 
-          ); 
- 
-          const url = 
-            publicUrl( 
-              COMMON_TRIG_PATH 
-            ); 
- 
-          console.log("Loading common Trig/BM CSV:", url);
+        "https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}",
+        {
+          maxZoom: 21,
 
-          const response = await fetch(url, { cache: "no-store" });
-          if (!response.ok) {
-            const responseText = await response.text().catch(() => "");
+          maxNativeZoom: 20,
+
+          attribution:
+            "&copy; Google",
+        }
+      );
+
+    googleSatellite.addTo(
+      map
+    );
+
+    /* ---------------------------------------------
+       SCALE BAR
+    --------------------------------------------- */
+
+    /*
+      Professional metric scale.
+
+      Leaflet automatically changes the displayed
+      scale depending on zoom level.
+
+      Example:
+      100 m
+      500 m
+      1 km
+      2 km
+      5 km
+    */
+
+    L.control
+      .scale({
+        position:
+          "bottomleft",
+
+        imperial:
+          false,
+
+        metric:
+          true,
+
+        maxWidth:
+          160,
+
+        updateWhenIdle:
+          false,
+      })
+      .addTo(map);
+
+    /* ---------------------------------------------
+       GROUPS
+    --------------------------------------------- */
+
+    const boundaryGroup =
+      L.layerGroup().addTo(
+        map
+      );
+
+    const crossGroup =
+      L.layerGroup().addTo(
+        map
+      );
+
+    const trigGroup =
+      L.layerGroup().addTo(
+        map
+      );
+
+    const controlGroup =
+      L.layerGroup().addTo(
+        map
+      );
+
+    const uploadGroup =
+      L.layerGroup().addTo(
+        map
+      );
+
+    boundaryGroupRef.current =
+      boundaryGroup;
+
+    crossGroupRef.current =
+      crossGroup;
+
+    trigGroupRef.current =
+      trigGroup;
+
+    controlGroupRef.current =
+      controlGroup;
+
+    uploadGroupRef.current =
+      uploadGroup;
+
+    /* ---------------------------------------------
+       LAYER CONTROL
+    --------------------------------------------- */
+
+    layerControlRef.current =
+      L.control
+        .layers(
+          {
+            "Google Satellite":
+              googleSatellite,
+
+            "Google Street Map":
+              googleStreet,
+          },
+          {
+            "Survey Boundary":
+              boundaryGroup,
+
+            "Cross Sections":
+              crossGroup,
+
+            "Trig / BM":
+              trigGroup,
+
+            "Control Points":
+              controlGroup,
+
+            "Uploaded Data":
+              uploadGroup,
+          },
+          {
+            collapsed:
+              false,
+
+            position:
+              "topright",
+          }
+        )
+        .addTo(map);
+
+    /* ---------------------------------------------
+       MEASUREMENT TOOL
+    --------------------------------------------- */
+
+    try {
+      L.control
+        .measure({
+          position:
+            "topleft",
+
+          /*
+            Survey-friendly distance units.
+
+            Primary:
+              meters
+
+            Secondary:
+              kilometers
+
+            Therefore:
+              125 m
+              845 m
+              1.25 km
+              etc.
+          */
+          primaryLengthUnit:
+            "meters",
+
+          secondaryLengthUnit:
+            "kilometers",
+
+          /*
+            Survey-friendly area units.
+
+            Primary:
+              square meters
+
+            Secondary:
+              hectares
+          */
+          primaryAreaUnit:
+            "sqmeters",
+
+          secondaryAreaUnit:
+            "hectares",
+
+          activeColor:
+            "#2563eb",
+
+          completedColor:
+            "#2563eb",
+
+          captureZIndex:
+            10000,
+
+          localization: {
+            units: {
+              sqmeters: {
+                factor:
+                  1,
+                display:
+                  "m²",
+                decimal:
+                  2,
+              },
+
+              hectares: {
+                factor:
+                  0.0001,
+                display:
+                  "ha",
+                decimal:
+                  3,
+              },
+
+              meters: {
+                factor:
+                  1,
+                display:
+                  "m",
+                decimal:
+                  2,
+              },
+
+              kilometers: {
+                factor:
+                  0.001,
+                display:
+                  "km",
+                decimal:
+                  3,
+              },
+            },
+          },
+        })
+        .addTo(map);
+    } catch (
+      measurementError
+    ) {
+      console.warn(
+        "Measurement tool could not initialize:",
+        measurementError
+      );
+    }
+
+    /* ---------------------------------------------
+       DEFAULT NEPAL VIEW
+    --------------------------------------------- */
+
+    map.setView(
+      [
+        28.3949,
+        84.124,
+      ],
+      7
+    );
+
+    /* ---------------------------------------------
+       FORCE MAP SIZE
+    --------------------------------------------- */
+
+    setTimeout(() => {
+      map.invalidateSize();
+    }, 300);
+
+    /* ---------------------------------------------
+       CLEANUP
+    --------------------------------------------- */
+
+    return () => {
+      map.remove();
+
+      mapRef.current =
+        null;
+    };
+  }, []);
+
+  /* =======================================================
+     LOAD TRIG / BM
+  ======================================================= */
+
+  const loadTrigPoints =
+    useCallback(
+      async () => {
+        try {
+          setStatus(
+            "Loading common Trig / BM data..."
+          );
+
+          const url =
+            publicUrl(
+              COMMON_TRIG_PATH
+            );
+
+          console.log(
+            "Loading common Trig/BM CSV:",
+            url
+          );
+
+          const response =
+            await fetch(
+              url,
+              {
+                cache:
+                  "no-store",
+              }
+            );
+
+          if (
+            !response.ok
+          ) {
+            const responseText =
+              await response
+                .text()
+                .catch(
+                  () => ""
+                );
+
             throw new Error(
-              `Trig CSV request failed (HTTP ${response.status}). ` +
-              `${responseText.slice(0, 160)} URL: ${url}`
+              `Trig CSV request failed (HTTP ${response.status}). ${responseText.slice(
+                0,
+                160
+              )} URL: ${url}`
             );
           }
 
-          const text = await response.text();
-          if (!text.trim()) {
-            throw new Error("Trig/BM CSV response was empty.");
-          }
-          console.log("Trig/BM CSV response preview:", text.slice(0, 250));
+          const text =
+            await response.text();
 
-          const points = parseTrigCSV(text); 
- 
-          trigPointsRef.current = 
-            points; 
- 
-          setTrigPoints( 
-            points 
-          ); 
- 
-          const group = 
-            trigGroupRef.current; 
- 
-          if (!group) { 
-            return; 
-          } 
- 
-          group.clearLayers(); 
- 
-          points.forEach( 
-            (point) => { 
-              const marker = 
-                L.marker( 
-                  point.__latLng, 
-                  { 
-                    icon: 
-                      point.type === 
-                      "BM" 
-                        ? bmIcon( 
-                            point.name 
-                          ) 
-                        : trigIcon( 
-                            point.name 
-                          ), 
- 
-                    pane: 
-                      "trigPane", 
-                  } 
-                ); 
- 
-              marker.bindPopup( 
-                trigPopup( 
-                  point 
-                ), 
-                { 
-                  maxWidth: 320, 
-                } 
-              ); 
- 
-              marker.addTo( 
-                group 
-              ); 
-            } 
-          ); 
- 
+          if (
+            !text.trim()
+          ) {
+            throw new Error(
+              "Trig/BM CSV response was empty."
+            );
+          }
+
+          console.log(
+            "Trig/BM CSV response preview:",
+            text.slice(
+              0,
+              250
+            )
+          );
+
+          const points =
+            parseTrigCSV(
+              text
+            );
+
+          trigPointsRef.current =
+            points;
+
+          setTrigPoints(
+            points
+          );
+
+          const group =
+            trigGroupRef.current;
+
+          if (!group) {
+            return;
+          }
+
+          group.clearLayers();
+
+          points.forEach(
+            (point) => {
+              const marker =
+                L.marker(
+                  point.__latLng,
+                  {
+                    icon:
+                      point.type ===
+                      "BM"
+                        ? bmIcon(
+                            point.name
+                          )
+                        : trigIcon(
+                            point.name
+                          ),
+
+                    pane:
+                      "trigPane",
+                  }
+                );
+
+              marker.bindPopup(
+                trigPopup(
+                  point
+                ),
+                {
+                  maxWidth:
+                    320,
+                }
+              );
+
+              marker.addTo(
+                group
+              );
+            }
+          );
+
           setError("");
+
           setStatus(
             `${points.length} common Trig / BM points loaded`
-          ); 
- 
-          console.log( 
-            "Trig/BM points:", 
-            points 
-          ); 
-        } catch (err) { 
-          console.error( 
-            "Trig/BM loading failed:", 
-            err 
-          ); 
- 
-          trigPointsRef.current = 
-            []; 
- 
-          setTrigPoints( 
-            [] 
-          ); 
- 
+          );
+
+          console.log(
+            "Trig/BM points:",
+            points
+          );
+        } catch (err) {
+          console.error(
+            "Trig/BM loading failed:",
+            err
+          );
+
+          trigPointsRef.current =
+            [];
+
+          setTrigPoints(
+            []
+          );
+
           setStatus(
             "Trig / BM data unavailable"
           );
-          setError(
-            `Trig/BM could not be loaded: ${err?.message || String(err)}`
-          ); 
-        } 
-      }, 
-      [] 
-    ); 
- 
-  /* ======================================================= 
-     LOAD INITIAL OVERVIEW 
-  ======================================================= */ 
- 
-  const showOverview = 
-    useCallback( 
-      async () => { 
-        if ( 
-          !mapRef.current 
-        ) { 
-          return; 
-        } 
- 
-        const map = 
-          mapRef.current; 
- 
-        const boundaryGroup = 
-          boundaryGroupRef.current; 
- 
-        const crossGroup = 
-          crossGroupRef.current; 
- 
-        const controlGroup = 
-          controlGroupRef.current; 
- 
-        const trigGroup = 
-          trigGroupRef.current; 
- 
-        if ( 
-          !boundaryGroup || 
-          !crossGroup || 
-          !controlGroup || 
-          !trigGroup 
-        ) { 
-          return; 
-        } 
- 
-        setSelectedProject( 
-          null 
-        ); 
- 
-        setError(""); 
- 
-        setStatus( 
-          "Loading survey overview..." 
-        ); 
- 
-        boundaryGroup.clearLayers(); 
- 
-        crossGroup.clearLayers(); 
- 
-        controlGroup.clearLayers(); 
- 
-        setControlPoints( 
-          [] 
-        ); 
- 
-        setBoundaryCount( 
-          0 
-        ); 
- 
-        setCrossCount( 
-          0 
-        ); 
- 
-        /* ----------------------------------------- 
-           LOAD COMMON TRIG 
-        ----------------------------------------- */ 
- 
-        if ( 
-          trigPointsRef.current.length === 
-          0 
-        ) { 
-          await loadTrigPoints(); 
-        } 
- 
-        /* ----------------------------------------- 
-           LOAD BOUNDARIES 
-        ----------------------------------------- */ 
- 
-        const overviewBounds = 
-          L.latLngBounds([]); 
- 
-        let totalBoundaries = 
-          0; 
- 
-        for ( 
-          const project of PROJECTS 
-        ) { 
-          if ( 
-            !project.boundaryPath 
-          ) { 
-            continue; 
-          } 
- 
-          try { 
-            const url = 
-              publicUrl( 
-                project.boundaryPath 
-              ); 
- 
-            const response = 
-              await fetch( 
-                url 
-              ); 
- 
-            if ( 
-              !response.ok 
-            ) { 
-              throw new Error( 
-                `Boundary request failed (${response.status})` 
-              ); 
-            } 
- 
-            const text = 
-              await response.text(); 
- 
-            const geojson = 
-              kmlTextToGeoJSON( 
-                text 
-              ); 
- 
-            const layer = 
-              L.geoJSON( 
-                geojson, 
-                { 
-                  pane: 
-                    "boundaryPane", 
- 
-                  interactive: 
-                    false, 
- 
-                  style: { 
-                    color: 
-                      "#f59e0b", 
- 
-                    weight: 3, 
- 
-                    opacity: 
-                      0.9, 
- 
-                    fillColor: 
-                      "#f59e0b", 
- 
-                    fillOpacity: 
-                      0.08, 
-                  }, 
-                } 
-              ); 
- 
-            layer.addTo( 
-              boundaryGroup 
-            ); 
- 
-            const bounds = 
-              layer.getBounds(); 
- 
-            if ( 
-              bounds.isValid() 
-            ) { 
-              overviewBounds.extend( 
-                bounds 
-              ); 
-            } 
- 
-            totalBoundaries++; 
-          } catch (err) { 
-            console.error( 
-              `Boundary failed for ${project.code}:`, 
-              err 
-            ); 
-          } 
-        } 
- 
-        /* ----------------------------------------- 
-           TRIG / BM BOUNDS 
-        ----------------------------------------- */ 
- 
-        const trigBounds = 
-          L.latLngBounds([]); 
- 
-        const currentTrigPoints = 
-          trigPointsRef.current; 
- 
-        currentTrigPoints.forEach( 
-          (point) => { 
-            if ( 
-              point.__latLng 
-            ) { 
-              trigBounds.extend( 
-                point.__latLng 
-              ); 
-            } 
-          } 
-        ); 
- 
-        if ( 
-          trigBounds.isValid() 
-        ) { 
-          overviewBounds.extend( 
-            trigBounds 
-          ); 
-        } 
- 
-        /* ----------------------------------------- 
-           FIT EVERYTHING 
-        ----------------------------------------- */ 
- 
-        if ( 
-          overviewBounds.isValid() 
-        ) { 
-          map.fitBounds( 
-            overviewBounds, 
-            { 
-              padding: [ 
-                60, 
-                60, 
-              ], 
- 
-              maxZoom: 17, 
- 
-              animate: false, 
-            } 
-          ); 
-        } else { 
-          map.setView( 
-            [ 
-              28.3949, 
-              84.124, 
-            ], 
-            7 
-          ); 
-        } 
- 
-        setBoundaryCount( 
-          totalBoundaries 
-        ); 
- 
-        setStatus( 
-          "Overview ready — survey boundary and common data loaded." 
-        ); 
- 
-        setTimeout(() => { 
-          map.invalidateSize(); 
-        }, 200); 
-      }, 
-      [ 
-        loadTrigPoints, 
-      ] 
-    ); 
- 
-  /* ======================================================= 
-     INITIAL OVERVIEW CALL 
-  ======================================================= */ 
- 
-  useEffect(() => { 
-    const timer = 
-      setTimeout(() => { 
-        showOverview(); 
-      }, 500); 
- 
-    return () => 
-      clearTimeout(timer); 
-  }, []); 
- 
-  /* ======================================================= 
-     LOAD PROJECT 
-  ======================================================= */ 
- 
-  const loadProject = 
-    useCallback( 
-      async ( 
-        project 
-      ) => { 
-        if ( 
-          !mapRef.current 
-        ) { 
-          return; 
-        } 
- 
-        const map = 
-          mapRef.current; 
- 
-        const boundaryGroup = 
-          boundaryGroupRef.current; 
- 
-        const crossGroup = 
-          crossGroupRef.current; 
- 
-        const controlGroup = 
-          controlGroupRef.current; 
- 
-        const trigGroup = 
-          trigGroupRef.current; 
- 
-        if ( 
-          !boundaryGroup || 
-          !crossGroup || 
-          !controlGroup || 
-          !trigGroup 
-        ) { 
-          setError( 
-            "Map layers are not initialized." 
-          ); 
- 
-          return; 
-        } 
- 
-        setLoading( 
-          true 
-        ); 
- 
-        setError(""); 
- 
-        setStatus( 
-          `Loading ${project.code}...` 
-        ); 
- 
-        /* ----------------------------------------- 
-           CLEAR OLD DATA 
-        ----------------------------------------- */ 
- 
-        boundaryGroup.clearLayers(); 
- 
-        crossGroup.clearLayers(); 
- 
-        controlGroup.clearLayers(); 
- 
-        setControlPoints( 
-          [] 
-        ); 
- 
-        setBoundaryCount( 
-          0 
-        ); 
- 
-        setCrossCount( 
-          0 
-        ); 
- 
-        /* ----------------------------------------- 
-           LOAD BOUNDARY 
-        ----------------------------------------- */ 
- 
-        if ( 
-          project.boundaryPath 
-        ) { 
-          try { 
-            const url = 
-              publicUrl( 
-                project.boundaryPath 
-              ); 
- 
-            const response = 
-              await fetch( 
-                url 
-              ); 
- 
-            if ( 
-              !response.ok 
-            ) { 
-              throw new Error( 
-                `Boundary request failed (${response.status})` 
-              ); 
-            } 
- 
-            const text = 
-              await response.text(); 
- 
-            const geojson = 
-              kmlTextToGeoJSON( 
-                text 
-              ); 
- 
-            const boundaryLayer = 
-              L.geoJSON( 
-                geojson, 
-                { 
-                  pane: 
-                    "boundaryPane", 
- 
-                  interactive: 
-                    false, 
- 
-                  style: { 
-                    color: 
-                      "#f59e0b", 
- 
-                    weight: 3, 
- 
-                    opacity: 
-                      0.95, 
- 
-                    fillColor: 
-                      "#f59e0b", 
- 
-                    fillOpacity: 
-                      0.08, 
-                  }, 
-                } 
-              ); 
- 
-            boundaryLayer.addTo( 
-              boundaryGroup 
-            ); 
- 
-            setBoundaryCount( 
-              Array.isArray( 
-                geojson.features 
-              ) 
-                ? geojson.features.length 
-                : 1 
-            ); 
-          } catch ( 
-            boundaryError 
-          ) { 
-            console.error( 
-              "Boundary loading failed:", 
-              boundaryError 
-            ); 
- 
-            setError( 
-              `Boundary could not be loaded: ${boundaryError.message}` 
-            ); 
-          } 
-        } 
- 
-        /* ----------------------------------------- 
-           LOAD CROSS SECTIONS 
- 
-           IMPORTANT: 
-           Use the dedicated KML parser above instead of 
-           relying on togeojson for this layer. This handles 
-           LineString, MultiGeometry and gx:Track KML. 
-        ----------------------------------------- */ 
- 
-        if ( 
-          project.crossPath 
-        ) { 
-          try { 
-            const url = 
-              publicUrl( 
-                project.crossPath 
-              ); 
- 
-            console.log( 
-              "Loading cross sections:", 
-              url 
-            ); 
- 
-            const response = 
-              await fetch( 
-                url, 
-                { 
-                  cache: "no-store", 
-                } 
-              ); 
- 
-            if ( 
-              !response.ok 
-            ) { 
-              throw new Error( 
-                `Cross section request failed (${response.status})` 
-              ); 
-            } 
- 
-            const text = (await response.text()).replace(/^\uFEFF/, "");
 
-            if (!text.trim()) {
-              throw new Error("Cross-section KML is empty.");
+          setError(
+            `Trig/BM could not be loaded: ${
+              err?.message ||
+              String(err)
+            }`
+          );
+        }
+      },
+      []
+    );
+
+  /* =======================================================
+     LOAD INITIAL OVERVIEW
+  ======================================================= */
+
+  const showOverview =
+    useCallback(
+      async () => {
+        if (
+          !mapRef.current
+        ) {
+          return;
+        }
+
+        const map =
+          mapRef.current;
+
+        const boundaryGroup =
+          boundaryGroupRef.current;
+
+        const crossGroup =
+          crossGroupRef.current;
+
+        const controlGroup =
+          controlGroupRef.current;
+
+        const trigGroup =
+          trigGroupRef.current;
+
+        if (
+          !boundaryGroup ||
+          !crossGroup ||
+          !controlGroup ||
+          !trigGroup
+        ) {
+          return;
+        }
+
+        setSelectedProject(
+          null
+        );
+
+        setError("");
+
+        setStatus(
+          "Loading survey overview..."
+        );
+
+        boundaryGroup.clearLayers();
+
+        crossGroup.clearLayers();
+
+        controlGroup.clearLayers();
+
+        setControlPoints(
+          []
+        );
+
+        setBoundaryCount(
+          0
+        );
+
+        setCrossCount(
+          0
+        );
+
+        /* -----------------------------------------
+           LOAD COMMON TRIG
+        ----------------------------------------- */
+
+        if (
+          trigPointsRef.current
+            .length === 0
+        ) {
+          await loadTrigPoints();
+        }
+
+        /* -----------------------------------------
+           LOAD BOUNDARIES
+        ----------------------------------------- */
+
+        const overviewBounds =
+          L.latLngBounds([]);
+
+        let totalBoundaries =
+          0;
+
+        for (
+          const project of PROJECTS
+        ) {
+          if (
+            !project.boundaryPath
+          ) {
+            continue;
+          }
+
+          try {
+            const url =
+              publicUrl(
+                project.boundaryPath
+              );
+
+            const response =
+              await fetch(
+                url,
+                {
+                  cache:
+                    "no-store",
+                }
+              );
+
+            if (
+              !response.ok
+            ) {
+              throw new Error(
+                `Boundary request failed (${response.status})`
+              );
             }
 
-            console.log("Cross-section response preview:", text.slice(0, 250));
+            const text =
+              await response.text();
 
-            const geojson = 
-              parseCrossSectionsKML( 
-                text 
-              ); 
- 
-            console.log( 
-              `Cross sections parsed: ${ 
-                geojson.features.length 
-              }` 
-            ); 
- 
-            if ( 
-              geojson.features.length === 0 
-            ) { 
-              throw new Error( 
-                "KML was loaded, but no LineString/MultiLineString cross-section geometry was found." 
-              ); 
-            } 
- 
-            const crossLayer = 
-              L.geoJSON( 
-                geojson, 
-                { 
-                  pane: 
-                    "crossPane", 
- 
-                  interactive: true, 
- 
-                  style: { 
-                    color: 
-                      "#ff0000", 
- 
-                    weight: 4, 
- 
-                    opacity: 
-                      1, 
- 
-                    lineCap: 
-                      "round", 
- 
-                    lineJoin: 
-                      "round", 
-                  }, 
- 
-                  onEachFeature: 
-                    (feature, layer) => { 
-                      const name = 
-                        feature?.properties?.name || 
-                        "Cross Section"; 
- 
-                      layer.bindPopup( 
-                        `<b>${escapeHtml( 
-                          name 
-                        )}</b>` 
-                      ); 
-                    }, 
-                } 
-              ); 
- 
-            crossLayer.addTo( 
-              crossGroup 
-            ); 
- 
-            setCrossCount( 
-              geojson.features.length 
-            ); 
-          } catch ( 
-            crossError 
-          ) { 
-            console.error( 
-              "Cross section loading failed:", 
-              crossError 
-            ); 
- 
-            setCrossCount( 
-              0 
-            ); 
- 
-            setError( 
-              `Cross sections could not be loaded: ${ 
-                crossError.message 
-              }` 
-            ); 
-          } 
-        } 
- 
-        /* ----------------------------------------- 
-           LOAD CONTROL POINTS 
-        ----------------------------------------- */ 
- 
-        let validControls = 
-          []; 
- 
-        try { 
-          const url = 
-            publicUrl( 
-              project.controlPath 
-            ); 
- 
-          const response = 
-            await fetch( 
-              url 
-            ); 
- 
-          if ( 
-            !response.ok 
-          ) { 
-            throw new Error( 
-              `Control CSV request failed (${response.status})` 
-            ); 
-          } 
- 
-          const text = 
-            await response.text(); 
- 
-          /* 
-             parseControlCSV() now removes: 
-             - empty coordinates 
-             - E = 0 
-             - N = 0 
-             - invalid coordinate rows 
-          */ 
- 
-          validControls = 
-            parseControlCSV( 
-              text, 
-              project.epsg 
-            ); 
- 
-          setControlPoints( 
-            validControls 
-          ); 
- 
-          /* ----------------------------------------- 
-             ADD ONLY VALID CONTROL MARKERS 
-          ----------------------------------------- */ 
- 
-          validControls.forEach( 
-            (point) => { 
-              if ( 
-                !point.__latLng 
-              ) { 
-                return; 
-              } 
- 
-              const marker = 
-                L.marker( 
-                  point.__latLng, 
-                  { 
-                    icon: 
-                      controlIcon( 
-                        point.station 
-                      ), 
- 
-                    pane: 
-                      "controlPane", 
- 
-                    riseOnHover: 
-                      true, 
-                  } 
-                ); 
- 
-              marker.bindPopup( 
-                controlPopup( 
-                  point, 
-                  project 
-                ), 
-                { 
-                  maxWidth: 360, 
- 
-                  minWidth: 230, 
- 
-                  autoPan: 
-                    true, 
-                } 
-              ); 
- 
-              marker.addTo( 
-                controlGroup 
-              ); 
-            } 
-          ); 
- 
-          console.log( 
-            `${validControls.length} valid control points loaded` 
-          ); 
-        } catch ( 
-          controlError 
-        ) { 
-          console.error( 
-            "Control point loading failed:", 
-            controlError 
-          ); 
- 
-          setError( 
-            `Control points could not be loaded: ${controlError.message}` 
-          ); 
-        } 
- 
-        /* ----------------------------------------- 
-           MAKE SURE TRIG IS LOADED 
-        ----------------------------------------- */ 
- 
-        if ( 
-          trigPointsRef.current.length === 
-          0 
-        ) { 
-          await loadTrigPoints(); 
-        } 
- 
-        /* ----------------------------------------- 
-           FINAL BOUNDS 
-        ----------------------------------------- */ 
- 
-        const finalBounds = 
-          L.latLngBounds([]); 
- 
-        const boundaryBounds = 
-          boundsFromLayerGroup( 
-            boundaryGroup 
-          ); 
- 
-        const crossBounds = 
-          boundsFromLayerGroup( 
-            crossGroup 
-          ); 
- 
-        const trigBounds = 
-          boundsFromLayerGroup( 
-            trigGroup 
-          ); 
- 
-        if ( 
-          boundaryBounds.isValid() 
-        ) { 
-          finalBounds.extend( 
-            boundaryBounds 
-          ); 
-        } 
- 
-        if ( 
-          crossBounds.isValid() 
-        ) { 
-          finalBounds.extend( 
-            crossBounds 
-          ); 
-        } 
- 
-        if ( 
-          trigBounds.isValid() 
-        ) { 
-          finalBounds.extend( 
-            trigBounds 
-          ); 
-        } 
- 
-        /* ----------------------------------------- 
-           ADD CONTROL POINT BOUNDS 
-        ----------------------------------------- */ 
- 
-        validControls.forEach( 
-          (point) => { 
-            if ( 
-              point.__latLng 
-            ) { 
-              finalBounds.extend( 
-                point.__latLng 
-              ); 
-            } 
-          } 
-        ); 
- 
-        /* ----------------------------------------- 
-           ZOOM TO PROJECT 
-        ----------------------------------------- */ 
- 
-        if ( 
-          finalBounds.isValid() 
-        ) { 
-          map.fitBounds( 
-            finalBounds, 
-            { 
-              padding: [ 
-                50, 
-                50, 
-              ], 
- 
-              maxZoom: 17, 
- 
-              animate: false, 
-            } 
-          ); 
-        } 
- 
-        /* ----------------------------------------- 
-           REFRESH LEAFLET SIZE 
-        ----------------------------------------- */ 
- 
-        setTimeout(() => { 
-          map.invalidateSize(); 
- 
-          if ( 
-            finalBounds.isValid() 
-          ) { 
-            map.fitBounds( 
-              finalBounds, 
-              { 
-                padding: [ 
-                  50, 
-                  50, 
-                ], 
- 
-                maxZoom: 17, 
- 
-                animate: false, 
-              } 
-            ); 
-          } 
-        }, 300); 
- 
-        /* ----------------------------------------- 
-           FINAL STATUS 
-        ----------------------------------------- */ 
- 
-        setStatus( 
-          `${project.code}: ${validControls.length} control points loaded` 
-        ); 
- 
-        setLoading( 
-          false 
-        ); 
-      }, 
-      [ 
-        loadTrigPoints, 
-      ] 
-    ); 
- 
-  /* ======================================================= 
-     OPEN PROJECT 
-  ======================================================= */ 
- 
-  const openProject = 
-    useCallback( 
-      async ( 
-        project 
-      ) => { 
-        setSelectedProject( 
-          project 
-        ); 
- 
-        await loadProject( 
-          project 
-        ); 
-      }, 
-      [ 
-        loadProject, 
-      ] 
-    ); 
- 
-  /* ======================================================= 
-     RETURN TO OVERVIEW 
-  ======================================================= */ 
- 
-  const returnToOverview = 
-    useCallback( 
-      async () => { 
-        await showOverview(); 
-      }, 
-      [ 
-        showOverview, 
-      ] 
-    ); 
- 
-  /* ======================================================= 
-     UPLOAD LOCAL KML / SHP 
-  ======================================================= */ 
- 
-  const handleUpload = 
-    useCallback( 
-      async ( 
-        event 
-      ) => { 
-        const files = 
-          Array.from( 
-            event.target.files || [] 
-          ); 
- 
-        if ( 
-          !files.length 
-        ) { 
-          return; 
-        } 
- 
-        setError(""); 
- 
-        const uploadGroup = 
-          uploadGroupRef.current; 
- 
-        if (!uploadGroup) { 
-          return; 
-        } 
- 
-        for ( 
-          const file of files 
-        ) { 
-          try { 
-            setStatus( 
-              `Reading ${file.name}...` 
-            ); 
- 
-            const geojson = 
-              await fileToGeoJSON( 
-                file 
-              ); 
- 
-            const layer = 
-              L.geoJSON( 
-                geojson, 
-                { 
-                  pane: 
-                    "uploadPane", 
- 
-                  style: { 
-                    color: 
-                      "#2563eb", 
- 
-                    weight: 3, 
- 
-                    fillColor: 
-                      "#2563eb", 
- 
-                    fillOpacity: 
-                      0.08, 
-                  }, 
- 
-                  pointToLayer: 
-                    ( 
-                      feature, 
-                      latlng 
-                    ) => 
-                      L.circleMarker( 
-                        latlng, 
-                        { 
-                          pane: 
-                            "uploadPane", 
- 
-                          radius: 5, 
- 
-                          color: 
-                            "#2563eb", 
- 
-                          fillColor: 
-                            "#2563eb", 
- 
-                          fillOpacity: 
-                            0.9, 
-                        } 
-                      ), 
-                } 
-              ); 
- 
-            layer.addTo( 
-              uploadGroup 
-            ); 
- 
-            const bounds = 
-              typeof layer.getBounds === 
-              "function" 
-                ? layer.getBounds() 
-                : null; 
- 
-            if ( 
-              bounds && 
-              bounds.isValid() && 
-              mapRef.current 
-            ) { 
-              mapRef.current.fitBounds( 
-                bounds, 
-                { 
-                  padding: [ 
-                    40, 
-                    40, 
-                  ], 
- 
-                  maxZoom: 18, 
-                } 
-              ); 
-            } 
- 
-            setUploads( 
-              ( 
-                previous 
-              ) => [ 
-                ...previous, 
- 
-                { 
-                  name: 
-                    file.name, 
- 
-                  type: 
-                    file.name 
-                      .toLowerCase() 
-                      .endsWith( 
-                        ".kml" 
-                      ) 
-                      ? "KML" 
-                      : "SHP", 
- 
-                  layer, 
-                }, 
-              ] 
-            ); 
- 
-            setStatus( 
-              `${file.name} loaded` 
-            ); 
-          } catch ( 
-            uploadError 
-          ) { 
-            console.error( 
-              uploadError 
-            ); 
- 
-            setError( 
-              `${file.name}: ${uploadError.message}` 
-            ); 
-          } 
-        } 
- 
-        event.target.value = 
-          ""; 
-      }, 
-      [] 
-    ); 
- 
-  /* ======================================================= 
-     ZOOM CONTROL POINT 
-  ======================================================= */ 
- 
-  function zoomToControl( 
-    point 
-  ) { 
-    if ( 
-      !mapRef.current || 
-      !point || 
-      !point.__latLng 
-    ) { 
-      return; 
-    } 
- 
-    mapRef.current.setView( 
-      point.__latLng, 
-      19, 
-      { 
-        animate: true, 
-      } 
-    ); 
- 
-    const group = 
-      controlGroupRef.current; 
- 
-    if (!group) { 
-      return; 
-    } 
- 
-    group.eachLayer( 
-      (layer) => { 
-        /* 
-           Only markers have getLatLng(). 
-           This prevents the old: 
-           "layer.getLatLng is not a function" 
-           error. 
-        */ 
- 
-        if ( 
-          !layer || 
-          typeof layer.getLatLng !== 
-            "function" 
-        ) { 
-          return; 
-        } 
- 
-        const latLng = 
-          layer.getLatLng(); 
- 
-        if ( 
-          latLng && 
-          Math.abs( 
-            latLng.lat - 
-              point.__latLng[0] 
-          ) < 
-            0.0000001 && 
-          Math.abs( 
-            latLng.lng - 
-              point.__latLng[1] 
-          ) < 
-            0.0000001 
-        ) { 
-          layer.openPopup(); 
-        } 
-      } 
-    ); 
-  } 
- 
-  /* ======================================================= 
-     RENDER 
-  ======================================================= */ 
- 
-  return ( 
-    <div className="shell"> 
- 
-      {/* ================================================= 
-          SIDEBAR 
-      ================================================= */} 
- 
-      <aside className="side"> 
- 
-        <div className="brand"> 
- 
-          <div className="brand-icon"> 
-            GIS 
-          </div> 
- 
-          <div> 
-            <b> 
-              SURVEY WEBGIS 
-            </b> 
- 
-            <small> 
-              Survey Archive & Project Overview 
-            </small> 
-          </div> 
- 
-        </div> 
- 
-        {/* ================================================= 
-            PROJECT DETAIL 
-        ================================================= */} 
- 
-        {selectedProject ? ( 
-          <> 
-            <button 
-              className="back" 
-              onClick={ 
-                returnToOverview 
-              } 
-            > 
-              ← All Projects 
-            </button> 
- 
-            <div className="intro"> 
- 
-              <h2> 
-                { 
-                  selectedProject.name 
-                } 
-              </h2> 
- 
-              <p> 
-                { 
-                  selectedProject.location 
-                } 
-                {" • "} 
-                { 
-                  selectedProject.year 
-                } 
-              </p> 
- 
-            </div> 
- 
-            <div className="summary"> 
- 
-              <b> 
-                { 
-                  selectedProject.code 
-                } 
-              </b> 
- 
-              <span> 
-                Coordinate System:{" "} 
-                { 
-                  selectedProject.epsg 
-                } 
-              </span> 
- 
-              <span> 
-                Control Points:{" "} 
-                { 
-                  controlPoints.length 
-                } 
-              </span> 
- 
-              <span> 
-                Cross Sections:{" "} 
-                { 
-                  crossCount 
-                } 
-              </span> 
- 
-              <span> 
-                Boundary:{" "} 
-                {boundaryCount 
-                  ? "Available" 
-                  : "Not available"} 
-              </span> 
- 
-              {loading && ( 
-                <small> 
-                  Loading project data... 
-                </small> 
-              )} 
- 
-            </div> 
- 
-            {/* CONTROL POINTS */} 
- 
-            <div className="section"> 
- 
-              <label> 
-                Control Points 
-              </label> 
- 
-              {controlPoints.length ? ( 
-                <div className="list"> 
- 
-                  {controlPoints.map( 
-                    ( 
-                      point 
-                    ) => ( 
-                      <button 
-                        key={ 
-                          `${point.station}-${point.easting}-${point.northing}` 
-                        } 
-                        className="item" 
-                        onClick={() => 
-                          zoomToControl( 
-                            point 
-                          ) 
-                        } 
-                      > 
- 
-                        <strong> 
-                          CP 
-                        </strong> 
- 
-                        <span> 
- 
-                          <b> 
-                            { 
-                              point.station 
-                            } 
-                          </b> 
- 
-                          <small> 
-                            E:{" "} 
-                            { 
-                              point.easting 
-                            } 
-                            {" | "} 
-                            N:{" "} 
-                            { 
-                              point.northing 
-                            } 
-                          </small> 
- 
-                        </span> 
- 
-                      </button> 
-                    ) 
-                  )} 
- 
-                </div> 
-              ) : ( 
-                <div className="empty"> 
-                  No control points loaded. 
-                </div> 
-              )} 
- 
-            </div> 
- 
-            {/* UPLOAD */} 
- 
-            <div className="upload"> 
- 
-              <b> 
-                Upload KML / SHP 
-              </b> 
- 
-              <input 
-                id="project-file-upload" 
-                type="file" 
-                accept=".kml,.zip" 
-                multiple 
-                style={{ 
-                  display: 
-                    "none", 
-                }} 
-                onChange={ 
-                  handleUpload 
-                } 
-              /> 
- 
-              <label 
-                htmlFor="project-file-upload" 
-                className="upload-btn" 
-                style={{ 
-                  display: 
-                    "block", 
- 
-                  textAlign: 
-                    "center", 
- 
-                  cursor: 
-                    "pointer", 
-                }} 
-              > 
-                + Upload KML / SHP 
-              </label> 
- 
-              <small> 
-                KML files can be uploaded 
-                directly. For SHP, upload 
-                the complete shapefile as 
-                a ZIP containing .shp, 
-                .shx, .dbf and preferably 
-                .prj. 
-              </small> 
- 
-              {uploads.length > 0 && ( 
-                <div className="uploads"> 
- 
-                  {uploads.map( 
-                    ( 
-                      upload, 
-                      index 
-                    ) => ( 
-                      <div 
-                        className="upload-card" 
-                        key={`${upload.name}-${index}`} 
-                      > 
- 
-                        <b> 
-                          { 
-                            upload.name 
-                          } 
-                        </b> 
- 
-                        <small> 
-                          { 
-                            upload.type 
-                          } loaded 
-                        </small> 
- 
-                        <button 
-                          onClick={() => { 
-                            upload.layer.remove(); 
- 
-                            setUploads( 
-                              ( 
-                                previous 
-                              ) => 
-                                previous.filter( 
-                                  ( 
-                                    _, 
-                                    i 
-                                  ) => 
-                                    i !== 
-                                    index 
-                                ) 
-                            ); 
-                          }} 
-                        > 
-                          Remove 
-                        </button> 
- 
-                      </div> 
-                    ) 
-                  )} 
- 
-                </div> 
-              )} 
- 
-            </div> 
- 
-            {/* STATUS */} 
- 
-            <div className="section"> 
- 
-              <label> 
-                System Status 
-              </label> 
- 
-              <div className="status"> 
-                {status} 
-              </div> 
- 
-              {error && ( 
-                <div className="error"> 
-                  {error} 
-                </div> 
-              )} 
- 
-            </div> 
- 
-            <div className="help"> 
- 
-              <b> 
-                Map Tools 
-              </b> 
- 
-              <div> 
-                • Mouse wheel: Zoom 
-              </div> 
- 
-              <div> 
-                • Drag: Pan 
-              </div> 
- 
-              <div> 
-                • Control Point: Click marker 
-              </div> 
- 
-              <div> 
-                • Measurement: Ruler tool 
-              </div> 
- 
-              <div> 
-                • Layers: Layer control 
-              </div> 
- 
-              <div> 
-                • KML / SHP: Upload survey data 
-              </div> 
- 
-            </div> 
-          </> 
-        ) : ( 
- 
-          /* ================================================= 
-             OVERVIEW 
-          ================================================= */ 
- 
-          <> 
-            <div className="intro"> 
- 
-              <h2> 
-                Survey Archive 
-              </h2> 
- 
-              <p> 
-                Select a survey project 
-                to view its detailed 
-                spatial data. 
-              </p> 
- 
-            </div> 
- 
-            <div className="section"> 
- 
-              <label> 
-                Search Projects 
-              </label> 
- 
-              <input 
-                className="input" 
-                value={ 
-                  search 
-                } 
-                onChange={( 
-                  event 
-                ) => 
-                  setSearch( 
-                    event.target.value 
-                  ) 
-                } 
-                placeholder="Search project..." 
-              /> 
- 
-            </div> 
- 
-            <div className="summary"> 
- 
-              <b> 
-                { 
-                  PROJECTS.length 
-                } Projects 
-              </b> 
- 
-              <span> 
-                All available survey 
-                projects are listed below. 
-              </span> 
- 
-            </div> 
- 
-            <div className="section"> 
- 
-              <label> 
-                Projects 
-              </label> 
- 
-              {filteredProjects.length ? ( 
-                <div className="list"> 
- 
-                  {[ 
-                    ...filteredProjects, 
-                  ] 
-                    .sort( 
-                      ( 
-                        a, 
-                        b 
-                      ) => 
-                        a.code.localeCompare( 
-                          b.code 
-                        ) 
-                    ) 
-                    .map( 
-                      ( 
-                        project 
-                      ) => ( 
-                        <button 
-                          key={ 
-                            project.id 
-                          } 
-                          className="item" 
-                          onClick={() => 
-                            openProject( 
-                              project 
-                            ) 
-                          } 
-                        > 
- 
-                          <strong> 
-                            { 
-                              project.code 
-                            } 
-                          </strong> 
- 
-                          <span> 
- 
-                            <b> 
-                              { 
-                                project.name 
-                              } 
-                            </b> 
- 
-                            <small> 
-                              { 
-                                project.location 
-                              } 
-                              {" • "} 
-                              { 
-                                project.year 
-                              } 
-                            </small> 
- 
-                          </span> 
- 
-                        </button> 
-                      ) 
-                    )} 
- 
-                </div> 
-              ) : ( 
-                <div className="empty"> 
-                  No project found. 
-                </div> 
-              )} 
- 
-            </div> 
- 
-            {/* INITIAL UPLOAD */} 
- 
-            <div className="upload"> 
- 
-              <b> 
-                Upload Survey Data 
-              </b> 
- 
-              <input 
-                id="overview-file-upload" 
-                type="file" 
-                accept=".kml,.zip" 
-                multiple 
-                style={{ 
-                  display: 
-                    "none", 
-                }} 
-                onChange={ 
-                  handleUpload 
-                } 
-              /> 
- 
-              <label 
-                htmlFor="overview-file-upload" 
-                className="upload-btn" 
-                style={{ 
-                  display: 
-                    "block", 
- 
-                  textAlign: 
-                    "center", 
- 
-                  cursor: 
-                    "pointer", 
-                }} 
-              > 
-                + Upload KML / SHP 
-              </label> 
- 
-              <small> 
-                Upload KML directly or 
-                upload a ZIP containing 
-                the SHP components. 
-              </small> 
- 
-              {uploads.length > 0 && ( 
-                <div className="uploads"> 
- 
-                  {uploads.map( 
-                    ( 
-                      upload, 
-                      index 
-                    ) => ( 
-                      <div 
-                        className="upload-card" 
-                        key={`${upload.name}-${index}`} 
-                      > 
- 
-                        <b> 
-                          { 
-                            upload.name 
-                          } 
-                        </b> 
- 
-                        <small> 
-                          { 
-                            upload.type 
-                          } loaded 
-                        </small> 
- 
-                        <button 
-                          onClick={() => { 
-                            upload.layer.remove(); 
- 
-                            setUploads( 
-                              ( 
-                                previous 
-                              ) => 
-                                previous.filter( 
-                                  ( 
-                                    _, 
-                                    i 
-                                  ) => 
-                                    i !== 
-                                    index 
-                                ) 
-                            ); 
-                          }} 
-                        > 
-                          Remove 
-                        </button> 
- 
-                      </div> 
-                    ) 
-                  )} 
- 
-                </div> 
-              )} 
- 
-            </div> 
- 
-            {/* COMMON DATA */} 
- 
-            <div className="summary"> 
- 
-              <b> 
-                Common Data 
-              </b> 
- 
-              <span> 
-                Trig / BM:{" "} 
-                { 
-                  trigPoints.length 
-                } 
-              </span> 
- 
-              <small> 
-                Common Trig/BM data is 
-                available across projects. 
-              </small> 
- 
-            </div> 
- 
-            {/* HELP */} 
- 
-            <div className="help"> 
- 
-              <b> 
-                How to use 
-              </b> 
- 
-              <div> 
-                • Select a project 
-              </div> 
- 
-              <div> 
-                • Map zooms to survey data 
-              </div> 
- 
-              <div> 
-                • Click a control point 
-              </div> 
- 
-              <div> 
-                • Control point photos load automatically 
-              </div> 
- 
-              <div> 
-                • Use the layer control 
-              </div> 
- 
-              <div> 
-                • Use measurement for distance and area 
-              </div> 
- 
-            </div> 
- 
-            <div className="section"> 
- 
-              <div className="status"> 
-                {status} 
-              </div> 
- 
-              {error && ( 
-                <div className="error"> 
-                  {error} 
-                </div> 
-              )} 
- 
-            </div> 
- 
-          </> 
-        )} 
- 
-      </aside> 
- 
-      {/* ================================================= 
-          MAP 
-      ================================================= */} 
- 
-      <main className="map"> 
- 
-        <div id="map" /> 
- 
-        <div className="map-title"> 
- 
-          <b> 
-            {selectedProject 
-              ? selectedProject.code 
-              : "SURVEY WEBGIS"} 
-          </b> 
- 
-          <span> 
-            {selectedProject 
-              ? selectedProject.name 
-              : "Survey Archive & Project Overview"} 
-          </span> 
- 
-        </div> 
- 
-        <div className="legend"> 
- 
-          <div> 
-            <span className="dot cp" /> 
-            Control Point 
-          </div> 
- 
-          <div> 
-            <span className="dot trig" /> 
-            Trig 
-          </div> 
- 
-          <div> 
-            <span className="dot bm" /> 
-            BM 
-          </div> 
- 
-          <div> 
-            <span className="line cross" /> 
-            Cross Section 
-          </div> 
- 
-          <div> 
-            <span className="line boundary" /> 
-            Survey Boundary 
-          </div> 
- 
-        </div> 
- 
-      </main> 
- 
-    </div> 
-  ); 
-} 
- 
-/* ========================================================= 
-   START REACT 
-========================================================= */ 
- 
-createRoot( 
-  document.getElementById( 
-    "root" 
-  ) 
-).render( 
-  <React.StrictMode> 
-    <App /> 
-  </React.StrictMode> 
+            const geojson =
+              kmlTextToGeoJSON(
+                text
+              );
+
+            /*
+              USE THE REUSABLE BOUNDARY
+              FUNCTION.
+
+              This gives every project its own
+              dynamic popup.
+            */
+            const layer =
+              createBoundaryLayer(
+                geojson,
+                project
+              );
+
+            layer.addTo(
+              boundaryGroup
+            );
+
+            const bounds =
+              layer.getBounds();
+
+            if (
+              bounds.isValid()
+            ) {
+              overviewBounds.extend(
+                bounds
+              );
+            }
+
+            totalBoundaries++;
+          } catch (err) {
+            console.error(
+              `Boundary failed for ${project.code}:`,
+              err
+            );
+          }
+        }
+
+        /* -----------------------------------------
+           TRIG / BM BOUNDS
+        ----------------------------------------- */
+
+        const trigBounds =
+          L.latLngBounds([]);
+
+        const currentTrigPoints =
+          trigPointsRef.current;
+
+        currentTrigPoints.forEach(
+          (point) => {
+            if (
+              point.__latLng
+            ) {
+              trigBounds.extend(
+                point.__latLng
+              );
+            }
+          }
+        );
+
+        if (
+          trigBounds.isValid()
+        ) {
+          overviewBounds.extend(
+            trigBounds
+          );
+        }
+
+        /* -----------------------------------------
+           FIT EVERYTHING
+        ----------------------------------------- */
+
+        if (
+          overviewBounds.isValid()
+        ) {
+          map.fitBounds(
+            overviewBounds,
+            {
+              padding: [
+                60,
+                60,
+              ],
+
+              maxZoom: 17,
+
+              animate: false,
+            }
+          );
+        } else {
+          map.setView(
+            [
+              28.3949,
+              84.124,
+            ],
+            7
+          );
+        }
+
+        setBoundaryCount(
+          totalBoundaries
+        );
+
+        setStatus(
+          "Overview ready — survey boundaries and common data loaded."
+        );
+
+        setTimeout(() => {
+          map.invalidateSize();
+        }, 200);
+      },
+      [
+        loadTrigPoints,
+      ]
+    );
+
+  /* =======================================================
+     INITIAL OVERVIEW CALL
+  ======================================================= */
+
+  useEffect(() => {
+    const timer =
+      setTimeout(() => {
+        showOverview();
+      }, 500);
+
+    return () =>
+      clearTimeout(timer);
+  }, [showOverview]);
+
+  /* =======================================================
+     LOAD PROJECT
+  ======================================================= */
+
+  const loadProject =
+    useCallback(
+      async (
+        project
+      ) => {
+        if (
+          !mapRef.current
+        ) {
+          return;
+        }
+
+        const map =
+          mapRef.current;
+
+        const boundaryGroup =
+          boundaryGroupRef.current;
+
+        const crossGroup =
+          crossGroupRef.current;
+
+        const controlGroup =
+          controlGroupRef.current;
+
+        const trigGroup =
+          trigGroupRef.current;
+
+        if (
+          !boundaryGroup ||
+          !crossGroup ||
+          !controlGroup ||
+          !trigGroup
+        ) {
+          setError(
+            "Map layers are not initialized."
+          );
+
+          return;
+        }
+
+        setLoading(
+          true
+        );
+
+        setError("");
+
+        setStatus(
+          `Loading ${project.code}...`
+        );
+
+        /* -----------------------------------------
+           CLEAR OLD DATA
+        ----------------------------------------- */
+
+        boundaryGroup.clearLayers();
+
+        crossGroup.clearLayers();
+
+        controlGroup.clearLayers();
+
+        setControlPoints(
+          []
+        );
+
+        setBoundaryCount(
+          0
+        );
+
+        setCrossCount(
+          0
+        );
+
+        /* -----------------------------------------
+           LOAD BOUNDARY
+        ----------------------------------------- */
+
+        if (
+          project.boundaryPath
+        ) {
+          try {
+            const url =
+              publicUrl(
+                project.boundaryPath
+              );
+
+            const response =
+              await fetch(
+                url,
+                {
+                  cache:
+                    "no-store",
+                }
+              );
+
+            if (
+              !response.ok
+            ) {
+              throw new Error(
+                `Boundary request failed (${response.status})`
+              );
+            }
+
+            const text =
+              await response.text();
+
+            const geojson =
+              kmlTextToGeoJSON(
+                text
+              );
+
+            /*
+              REUSABLE CLICKABLE BOUNDARY
+            */
+            const boundaryLayer =
+              createBoundaryLayer(
+                geojson,
+                project
+              );
+
+            boundaryLayer.addTo(
+              boundaryGroup
+            );
+
+            setBoundaryCount(
+              Array.isArray(
+                geojson.features
+              )
+                ? geojson.features.length
+                : 1
+            );
+          } catch (
+            boundaryError
+          ) {
+            console.error(
+              "Boundary loading failed:",
+              boundaryError
+            );
+
+            setError(
+              `Boundary could not be loaded: ${boundaryError.message}`
+            );
+          }
+        }
+
+        /* -----------------------------------------
+           LOAD CROSS SECTIONS
+        ----------------------------------------- */
+
+        if (
+          project.crossPath
+        ) {
+          try {
+            const url =
+              publicUrl(
+                project.crossPath
+              );
+
+            console.log(
+              "Loading cross sections:",
+              url
+            );
+
+            const response =
+              await fetch(
+                url,
+                {
+                  cache:
+                    "no-store",
+                }
+              );
+
+            if (
+              !response.ok
+            ) {
+              throw new Error(
+                `Cross section request failed (${response.status})`
+              );
+            }
+
+            const text =
+              (
+                await response.text()
+              ).replace(
+                /^\uFEFF/,
+                ""
+              );
+
+            if (
+              !text.trim()
+            ) {
+              throw new Error(
+                "Cross-section KML is empty."
+              );
+            }
+
+            console.log(
+              "Cross-section response preview:",
+              text.slice(
+                0,
+                250
+              )
+            );
+
+            const geojson =
+              parseCrossSectionsKML(
+                text
+              );
+
+            console.log(
+              `Cross sections parsed: ${geojson.features.length}`
+            );
+
+            if (
+              geojson.features
+                .length === 0
+            ) {
+              throw new Error(
+                "KML was loaded, but no LineString/MultiLineString cross-section geometry was found."
+              );
+            }
+
+            const crossLayer =
+              L.geoJSON(
+                geojson,
+                {
+                  pane:
+                    "crossPane",
+
+                  interactive:
+                    true,
+
+                  style: {
+                    color:
+                      "#ff0000",
+
+                    weight: 4,
+
+                    opacity:
+                      1,
+
+                    lineCap:
+                      "round",
+
+                    lineJoin:
+                      "round",
+                  },
+
+                  onEachFeature:
+                    (
+                      feature,
+                      layer
+                    ) => {
+                      const name =
+                        feature
+                          ?.properties
+                          ?.name ||
+                        "Cross Section";
+
+                      layer.bindPopup(
+                        `<b>${escapeHtml(
+                          name
+                        )}</b>`
+                      );
+                    },
+                }
+              );
+
+            crossLayer.addTo(
+              crossGroup
+            );
+
+            setCrossCount(
+              geojson.features
+                .length
+            );
+          } catch (
+            crossError
+          ) {
+            console.error(
+              "Cross section loading failed:",
+              crossError
+            );
+
+            setCrossCount(
+              0
+            );
+
+            setError(
+              `Cross sections could not be loaded: ${crossError.message}`
+            );
+          }
+        }
+
+        /* -----------------------------------------
+           LOAD CONTROL POINTS
+        ----------------------------------------- */
+
+        let validControls =
+          [];
+
+        try {
+          const url =
+            publicUrl(
+              project.controlPath
+            );
+
+          const response =
+            await fetch(
+              url,
+              {
+                cache:
+                  "no-store",
+              }
+            );
+
+          if (
+            !response.ok
+          ) {
+            throw new Error(
+              `Control CSV request failed (${response.status})`
+            );
+          }
+
+          const text =
+            await response.text();
+
+          validControls =
+            parseControlCSV(
+              text,
+              project.epsg
+            );
+
+          setControlPoints(
+            validControls
+          );
+
+          validControls.forEach(
+            (point) => {
+              if (
+                !point.__latLng
+              ) {
+                return;
+              }
+
+              const marker =
+                L.marker(
+                  point.__latLng,
+                  {
+                    icon:
+                      controlIcon(
+                        point.station
+                      ),
+
+                    pane:
+                      "controlPane",
+
+                    riseOnHover:
+                      true,
+                  }
+                );
+
+              marker.bindPopup(
+                controlPopup(
+                  point,
+                  project
+                ),
+                {
+                  maxWidth:
+                    360,
+
+                  minWidth:
+                    230,
+
+                  autoPan:
+                    true,
+                }
+              );
+
+              marker.addTo(
+                controlGroup
+              );
+            }
+          );
+
+          console.log(
+            `${validControls.length} valid control points loaded`
+          );
+        } catch (
+          controlError
+        ) {
+          console.error(
+            "Control point loading failed:",
+            controlError
+          );
+
+          setError(
+            `Control points could not be loaded: ${controlError.message}`
+          );
+        }
+
+        /* -----------------------------------------
+           MAKE SURE TRIG IS LOADED
+        ----------------------------------------- */
+
+        if (
+          trigPointsRef.current
+            .length === 0
+        ) {
+          await loadTrigPoints();
+        }
+
+        /* -----------------------------------------
+           FINAL BOUNDS
+        ----------------------------------------- */
+
+        const finalBounds =
+          L.latLngBounds([]);
+
+        const boundaryBounds =
+          boundsFromLayerGroup(
+            boundaryGroup
+          );
+
+        const crossBounds =
+          boundsFromLayerGroup(
+            crossGroup
+          );
+
+        const trigBounds =
+          boundsFromLayerGroup(
+            trigGroup
+          );
+
+        if (
+          boundaryBounds.isValid()
+        ) {
+          finalBounds.extend(
+            boundaryBounds
+          );
+        }
+
+        if (
+          crossBounds.isValid()
+        ) {
+          finalBounds.extend(
+            crossBounds
+          );
+        }
+
+        if (
+          trigBounds.isValid()
+        ) {
+          finalBounds.extend(
+            trigBounds
+          );
+        }
+
+        validControls.forEach(
+          (point) => {
+            if (
+              point.__latLng
+            ) {
+              finalBounds.extend(
+                point.__latLng
+              );
+            }
+          }
+        );
+
+        /* -----------------------------------------
+           ZOOM TO PROJECT
+        ----------------------------------------- */
+
+        if (
+          finalBounds.isValid()
+        ) {
+          map.fitBounds(
+            finalBounds,
+            {
+              padding: [
+                50,
+                50,
+              ],
+
+              maxZoom: 17,
+
+              animate: false,
+            }
+          );
+        }
+
+        /* -----------------------------------------
+           REFRESH LEAFLET SIZE
+        ----------------------------------------- */
+
+        setTimeout(() => {
+          map.invalidateSize();
+
+          if (
+            finalBounds.isValid()
+          ) {
+            map.fitBounds(
+              finalBounds,
+              {
+                padding: [
+                  50,
+                  50,
+                ],
+
+                maxZoom: 17,
+
+                animate: false,
+              }
+            );
+          }
+        }, 300);
+
+        /* -----------------------------------------
+           FINAL STATUS
+        ----------------------------------------- */
+
+        setStatus(
+          `${project.code}: ${validControls.length} control points loaded`
+        );
+
+        setLoading(
+          false
+        );
+      },
+      [
+        loadTrigPoints,
+      ]
+    );
+
+  /* =======================================================
+     OPEN PROJECT
+  ======================================================= */
+
+  const openProject =
+    useCallback(
+      async (
+        project
+      ) => {
+        setSelectedProject(
+          project
+        );
+
+        await loadProject(
+          project
+        );
+      },
+      [
+        loadProject,
+      ]
+    );
+
+  /* =======================================================
+     RETURN TO OVERVIEW
+  ======================================================= */
+
+  const returnToOverview =
+    useCallback(
+      async () => {
+        await showOverview();
+      },
+      [
+        showOverview,
+      ]
+    );
+
+  /* =======================================================
+     UPLOAD LOCAL KML / SHP
+  ======================================================= */
+
+  const handleUpload =
+    useCallback(
+      async (
+        event
+      ) => {
+        const files =
+          Array.from(
+            event.target.files ||
+              []
+          );
+
+        if (
+          !files.length
+        ) {
+          return;
+        }
+
+        setError("");
+
+        const uploadGroup =
+          uploadGroupRef.current;
+
+        if (!uploadGroup) {
+          return;
+        }
+
+        for (
+          const file of files
+        ) {
+          try {
+            setStatus(
+              `Reading ${file.name}...`
+            );
+
+            const geojson =
+              await fileToGeoJSON(
+                file
+              );
+
+            const layer =
+              L.geoJSON(
+                geojson,
+                {
+                  pane:
+                    "uploadPane",
+
+                  style: {
+                    color:
+                      "#2563eb",
+
+                    weight: 3,
+
+                    fillColor:
+                      "#2563eb",
+
+                    fillOpacity:
+                      0.08,
+                  },
+
+                  pointToLayer:
+                    (
+                      feature,
+                      latlng
+                    ) =>
+                      L.circleMarker(
+                        latlng,
+                        {
+                          pane:
+                            "uploadPane",
+
+                          radius:
+                            5,
+
+                          color:
+                            "#2563eb",
+
+                          fillColor:
+                            "#2563eb",
+
+                          fillOpacity:
+                            0.9,
+                        }
+                      ),
+                }
+              );
+
+            layer.addTo(
+              uploadGroup
+            );
+
+            const bounds =
+              typeof layer.getBounds ===
+              "function"
+                ? layer.getBounds()
+                : null;
+
+            if (
+              bounds &&
+              bounds.isValid() &&
+              mapRef.current
+            ) {
+              mapRef.current.fitBounds(
+                bounds,
+                {
+                  padding: [
+                    40,
+                    40,
+                  ],
+
+                  maxZoom: 18,
+                }
+              );
+            }
+
+            setUploads(
+              (
+                previous
+              ) => [
+                ...previous,
+
+                {
+                  name:
+                    file.name,
+
+                  type:
+                    file.name
+                      .toLowerCase()
+                      .endsWith(
+                        ".kml"
+                      )
+                      ? "KML"
+                      : "SHP",
+
+                  layer,
+                },
+              ]
+            );
+
+            setStatus(
+              `${file.name} loaded`
+            );
+          } catch (
+            uploadError
+          ) {
+            console.error(
+              uploadError
+            );
+
+            setError(
+              `${file.name}: ${uploadError.message}`
+            );
+          }
+        }
+
+        event.target.value =
+          "";
+      },
+      []
+    );
+
+  /* =======================================================
+     ZOOM CONTROL POINT
+  ======================================================= */
+
+  function zoomToControl(
+    point
+  ) {
+    if (
+      !mapRef.current ||
+      !point ||
+      !point.__latLng
+    ) {
+      return;
+    }
+
+    mapRef.current.setView(
+      point.__latLng,
+      19,
+      {
+        animate:
+          true,
+      }
+    );
+
+    const group =
+      controlGroupRef.current;
+
+    if (!group) {
+      return;
+    }
+
+    group.eachLayer(
+      (layer) => {
+        if (
+          !layer ||
+          typeof layer.getLatLng !==
+            "function"
+        ) {
+          return;
+        }
+
+        const latLng =
+          layer.getLatLng();
+
+        if (
+          latLng &&
+          Math.abs(
+            latLng.lat -
+              point.__latLng[0]
+          ) <
+            0.0000001 &&
+          Math.abs(
+            latLng.lng -
+              point.__latLng[1]
+          ) <
+            0.0000001
+        ) {
+          layer.openPopup();
+        }
+      }
+    );
+  }
+
+  /* =======================================================
+     RENDER
+  ======================================================= */
+
+  return (
+    <div className="shell">
+
+      {/* =================================================
+          SIDEBAR
+      ================================================= */}
+
+      <aside className="side">
+
+        <div className="brand">
+
+          <div className="brand-icon">
+            GIS
+          </div>
+
+          <div>
+            <b>
+              SURVEY WEBGIS
+            </b>
+
+            <small>
+              Survey Archive & Project Overview
+            </small>
+          </div>
+
+        </div>
+
+        {/* =================================================
+            PROJECT DETAIL
+        ================================================= */}
+
+        {selectedProject ? (
+          <>
+
+            <button
+              className="back"
+              onClick={
+                returnToOverview
+              }
+            >
+              ← All Projects
+            </button>
+
+            <div className="intro">
+
+              <h2>
+                {
+                  selectedProject.name
+                }
+              </h2>
+
+              <p>
+                {
+                  selectedProject.location
+                }
+                {" • "}
+                {
+                  selectedProject.year
+                }
+              </p>
+
+            </div>
+
+            <div className="summary">
+
+              <b>
+                {
+                  selectedProject.code
+                }
+              </b>
+
+              <span>
+                Coordinate System:{" "}
+                {
+                  selectedProject.epsg
+                }
+              </span>
+
+              <span>
+                Control Points:{" "}
+                {
+                  controlPoints.length
+                }
+              </span>
+
+              <span>
+                Cross Sections:{" "}
+                {
+                  crossCount
+                }
+              </span>
+
+              <span>
+                Boundary:{" "}
+                {boundaryCount
+                  ? "Available"
+                  : "Not available"}
+              </span>
+
+              {loading && (
+                <small>
+                  Loading project data...
+                </small>
+              )}
+
+            </div>
+
+            {/* CONTROL POINTS */}
+
+            <div className="section">
+
+              <label>
+                Control Points
+              </label>
+
+              {controlPoints.length ? (
+                <div className="list">
+
+                  {controlPoints.map(
+                    (
+                      point
+                    ) => (
+                      <button
+                        key={
+                          `${point.station}-${point.easting}-${point.northing}`
+                        }
+                        className="item"
+                        onClick={() =>
+                          zoomToControl(
+                            point
+                          )
+                        }
+                      >
+
+                        <strong>
+                          CP
+                        </strong>
+
+                        <span>
+
+                          <b>
+                            {
+                              point.station
+                            }
+                          </b>
+
+                          <small>
+                            E:{" "}
+                            {
+                              point.easting
+                            }
+                            {" | "}
+                            N:{" "}
+                            {
+                              point.northing
+                            }
+                          </small>
+
+                        </span>
+
+                      </button>
+                    )
+                  )}
+
+                </div>
+              ) : (
+                <div className="empty">
+                  No control points loaded.
+                </div>
+              )}
+
+            </div>
+
+            {/* UPLOAD */}
+
+            <div className="upload">
+
+              <b>
+                Upload KML / SHP
+              </b>
+
+              <input
+                id="project-file-upload"
+                type="file"
+                accept=".kml,.zip"
+                multiple
+                style={{
+                  display:
+                    "none",
+                }}
+                onChange={
+                  handleUpload
+                }
+              />
+
+              <label
+                htmlFor="project-file-upload"
+                className="upload-btn"
+                style={{
+                  display:
+                    "block",
+
+                  textAlign:
+                    "center",
+
+                  cursor:
+                    "pointer",
+                }}
+              >
+                + Upload KML / SHP
+              </label>
+
+              <small>
+                KML files can be uploaded
+                directly. For SHP, upload
+                the complete shapefile as
+                a ZIP containing .shp,
+                .shx, .dbf and preferably
+                .prj.
+              </small>
+
+              {uploads.length > 0 && (
+                <div className="uploads">
+
+                  {uploads.map(
+                    (
+                      upload,
+                      index
+                    ) => (
+                      <div
+                        className="upload-card"
+                        key={`${upload.name}-${index}`}
+                      >
+
+                        <b>
+                          {
+                            upload.name
+                          }
+                        </b>
+
+                        <small>
+                          {
+                            upload.type
+                          } loaded
+                        </small>
+
+                        <button
+                          onClick={() => {
+                            upload.layer.remove();
+
+                            setUploads(
+                              (
+                                previous
+                              ) =>
+                                previous.filter(
+                                  (
+                                    _,
+                                    i
+                                  ) =>
+                                    i !==
+                                    index
+                                )
+                            );
+                          }}
+                        >
+                          Remove
+                        </button>
+
+                      </div>
+                    )
+                  )}
+
+                </div>
+              )}
+
+            </div>
+
+            {/* STATUS */}
+
+            <div className="section">
+
+              <label>
+                System Status
+              </label>
+
+              <div className="status">
+                {status}
+              </div>
+
+              {error && (
+                <div className="error">
+                  {error}
+                </div>
+              )}
+
+            </div>
+
+            <div className="help">
+
+              <b>
+                Map Tools
+              </b>
+
+              <div>
+                • Mouse wheel: Zoom
+              </div>
+
+              <div>
+                • Drag: Pan
+              </div>
+
+              <div>
+                • Control Point: Click marker
+              </div>
+
+              <div>
+                • Boundary: Click boundary
+              </div>
+
+              <div>
+                • Measurement: Ruler tool
+              </div>
+
+              <div>
+                • Scale: Bottom-left
+              </div>
+
+              <div>
+                • Layers: Layer control
+              </div>
+
+              <div>
+                • KML / SHP: Upload survey data
+              </div>
+
+            </div>
+
+          </>
+        ) : (
+
+          /* =================================================
+             OVERVIEW
+          ================================================= */
+
+          <>
+
+            <div className="intro">
+
+              <h2>
+                Survey Archive
+              </h2>
+
+              <p>
+                Select a survey project
+                to view its detailed
+                spatial data.
+              </p>
+
+            </div>
+
+            <div className="section">
+
+              <label>
+                Search Projects
+              </label>
+
+              <input
+                className="input"
+                value={
+                  search
+                }
+                onChange={(
+                  event
+                ) =>
+                  setSearch(
+                    event.target.value
+                  )
+                }
+                placeholder="Search project..."
+              />
+
+            </div>
+
+            <div className="summary">
+
+              <b>
+                {
+                  PROJECTS.length
+                } Projects
+              </b>
+
+              <span>
+                All available survey
+                projects are listed below.
+              </span>
+
+            </div>
+
+            <div className="section">
+
+              <label>
+                Projects
+              </label>
+
+              {filteredProjects.length ? (
+                <div className="list">
+
+                  {[
+                    ...filteredProjects,
+                  ]
+                    .sort(
+                      (
+                        a,
+                        b
+                      ) =>
+                        a.code.localeCompare(
+                          b.code
+                        )
+                    )
+                    .map(
+                      (
+                        project
+                      ) => (
+                        <button
+                          key={
+                            project.id
+                          }
+                          className="item"
+                          onClick={() =>
+                            openProject(
+                              project
+                            )
+                          }
+                        >
+
+                          <strong>
+                            {
+                              project.code
+                            }
+                          </strong>
+
+                          <span>
+
+                            <b>
+                              {
+                                project.name
+                              }
+                            </b>
+
+                            <small>
+                              {
+                                project.location
+                              }
+                              {" • "}
+                              {
+                                project.year
+                              }
+                            </small>
+
+                          </span>
+
+                        </button>
+                      )
+                    )}
+
+                </div>
+              ) : (
+                <div className="empty">
+                  No project found.
+                </div>
+              )}
+
+            </div>
+
+            {/* INITIAL UPLOAD */}
+
+            <div className="upload">
+
+              <b>
+                Upload Survey Data
+              </b>
+
+              <input
+                id="overview-file-upload"
+                type="file"
+                accept=".kml,.zip"
+                multiple
+                style={{
+                  display:
+                    "none",
+                }}
+                onChange={
+                  handleUpload
+                }
+              />
+
+              <label
+                htmlFor="overview-file-upload"
+                className="upload-btn"
+                style={{
+                  display:
+                    "block",
+
+                  textAlign:
+                    "center",
+
+                  cursor:
+                    "pointer",
+                }}
+              >
+                + Upload KML / SHP
+              </label>
+
+              <small>
+                Upload KML directly or
+                upload a ZIP containing
+                the SHP components.
+              </small>
+
+              {uploads.length > 0 && (
+                <div className="uploads">
+
+                  {uploads.map(
+                    (
+                      upload,
+                      index
+                    ) => (
+                      <div
+                        className="upload-card"
+                        key={`${upload.name}-${index}`}
+                      >
+
+                        <b>
+                          {
+                            upload.name
+                          }
+                        </b>
+
+                        <small>
+                          {
+                            upload.type
+                          } loaded
+                        </small>
+
+                        <button
+                          onClick={() => {
+                            upload.layer.remove();
+
+                            setUploads(
+                              (
+                                previous
+                              ) =>
+                                previous.filter(
+                                  (
+                                    _,
+                                    i
+                                  ) =>
+                                    i !==
+                                    index
+                                )
+                            );
+                          }}
+                        >
+                          Remove
+                        </button>
+
+                      </div>
+                    )
+                  )}
+
+                </div>
+              )}
+
+            </div>
+
+            {/* COMMON DATA */}
+
+            <div className="summary">
+
+              <b>
+                Common Data
+              </b>
+
+              <span>
+                Trig / BM:{" "}
+                {
+                  trigPoints.length
+                }
+              </span>
+
+              <small>
+                Common Trig/BM data is
+                available across projects.
+              </small>
+
+            </div>
+
+            {/* HELP */}
+
+            <div className="help">
+
+              <b>
+                How to use
+              </b>
+
+              <div>
+                • Select a project
+              </div>
+
+              <div>
+                • Map zooms to survey data
+              </div>
+
+              <div>
+                • Click a control point
+              </div>
+
+              <div>
+                • Click a survey boundary
+              </div>
+
+              <div>
+                • Control point photos load automatically
+              </div>
+
+              <div>
+                • Use the layer control
+              </div>
+
+              <div>
+                • Use ruler for distance and area
+              </div>
+
+              <div>
+                • Use bottom-left scale bar for map scale
+              </div>
+
+            </div>
+
+            <div className="section">
+
+              <div className="status">
+                {status}
+              </div>
+
+              {error && (
+                <div className="error">
+                  {error}
+                </div>
+              )}
+
+            </div>
+
+          </>
+        )}
+
+      </aside>
+
+      {/* =================================================
+          MAP
+      ================================================= */}
+
+      <main className="map">
+
+        <div id="map" />
+
+        <div className="map-title">
+
+          <b>
+            {selectedProject
+              ? selectedProject.code
+              : "SURVEY WEBGIS"}
+          </b>
+
+          <span>
+            {selectedProject
+              ? selectedProject.name
+              : "Survey Archive & Project Overview"}
+          </span>
+
+        </div>
+
+        <div className="legend">
+
+          <div>
+            <span className="dot cp" />
+            Control Point
+          </div>
+
+          <div>
+            <span className="dot trig" />
+            Trig
+          </div>
+
+          <div>
+            <span className="dot bm" />
+            BM
+          </div>
+
+          <div>
+            <span className="line cross" />
+            Cross Section
+          </div>
+
+          <div>
+            <span className="line boundary" />
+            Survey Boundary
+          </div>
+
+        </div>
+
+      </main>
+
+    </div>
+  );
+}
+
+/* =========================================================
+   START REACT
+========================================================= */
+
+createRoot(
+  document.getElementById(
+    "root"
+  )
+).render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>
 );
